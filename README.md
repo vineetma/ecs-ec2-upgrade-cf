@@ -114,7 +114,17 @@ ImageId: 'ami-0c55b159cbfafe1f0'  # <- replace with new AMI ID
 
 Container logs written to the EC2 host filesystem are lost when an instance is terminated — which happens during AMI upgrades, scaling events, or failures.
 
-EFS is a shared network filesystem mounted on every EC2 instance at boot. nginx logs are mapped from inside the container through the host and into EFS:
+EFS is a distributed network filesystem (NFS) — not a single physical disk. AWS replicates its data across multiple AZs internally. The two mount targets in this template are simply **network entry points** into that distributed system, one per AZ. There is one logical filesystem, accessible from both instances simultaneously.
+
+```
+EFS (distributed internally across AZs)
+           ↑                      ↑
+ MountTarget (AZ-0)       MountTarget (AZ-1)    ← access points, not separate disks
+           ↑                      ↑
+    EC2 Instance 1          EC2 Instance 2
+```
+
+nginx logs are mapped from inside the container through the host and into EFS:
 
 ```
 nginx container /var/log/nginx
@@ -123,6 +133,39 @@ EC2 host /ecs/logs/nginx
         ↓  (EFS mount via /etc/fstab in UserData)
 EFS FileSystem  ← persists independently of any EC2
 ```
+
+Both instances write to EFS concurrently without contention because each nginx instance writes its own log stream — they are not writing to the same file simultaneously. NFS locking only becomes a concern when multiple writers target the same file.
+
+---
+
+##### Storage options compared
+
+| | Local disk (instance store) | EBS | EFS |
+|---|---|---|---|
+| Latency | ~0.1ms | ~0.5ms | ~1–3ms |
+| Throughput | Very high | High | Moderate |
+| Shared across instances | No | No | Yes |
+| Survives instance termination | No | Yes | Yes |
+
+**Why not EBS?**
+EBS is a block device attached to a single EC2 instance — it cannot be mounted by two instances at the same time (Multi-Attach exists but is limited to specific volume types and use cases, and is not suitable for a general shared filesystem). When an instance is terminated and replaced by the ASG, the EBS volume is detached and the new instance gets a fresh one. You would have to manually re-attach and re-mount the old volume, which defeats the purpose of automated rolling upgrades.
+
+**Why EFS is fine here despite network overhead:**
+nginx buffers log writes and flushes periodically — it is not doing random low-latency I/O. The 1–3ms network overhead of EFS is irrelevant for log workloads. The penalty would matter for databases, caches, or high-throughput binary I/O.
+
+---
+
+##### Alternatives if you needed more than EFS
+
+| Approach | How | When to use |
+|---|---|---|
+| **EFS** (current) | Shared NFS mount, no extra agents | Simple log persistence, small-to-medium volume |
+| **Fluent Bit sidecar** | Container alongside nginx reads its log files and ships to S3 or CloudWatch | Production: searchable, queryable logs at scale; decouples log storage from instance lifecycle entirely |
+| **Local disk + accept loss** | No persistence, logs only available while instance is running | Fine if logs are only needed for live debugging, not audit or analysis |
+
+A Fluent Bit sidecar would run as a second container in the same ECS task, sharing a volume with nginx, and stream logs out in real time — no EFS needed at all. That is the production pattern when log durability and queryability matter.
+
+---
 
 The task definition wires this up:
 
