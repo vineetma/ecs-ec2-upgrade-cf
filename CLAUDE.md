@@ -16,7 +16,8 @@ AWS ECS infrastructure built with CloudFormation. Learning path: smoke test → 
 - **No ALB** — intentionally omitted to minimize costs
 - **EC2 launch type** — not Fargate
 - **Old AL2 AMI** in `cloud-formation.yaml` is deliberate — EC2 AMI upgrade is a planned exercise
-- Requires pre-existing VPC + 2 subnets passed as parameters
+- **VPC is stack-owned** — created inside the template (VPC, IGW, 2 subnets, route table); no pre-existing networking required
+- **No SSH / no key pairs** — use SSM Session Manager; `AmazonSSMManagedInstanceCore` is attached to the instance role
 
 ## IaC
 

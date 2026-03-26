@@ -3,21 +3,74 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'ECS Cluster with 2 t3.small EC2 instances, each running 1 container task.'
 
-Parameters:
-  KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: 'EC2 Key Pair name for SSH access'
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: 'VPC ID where resources will be created'
-  SubnetId1:
-    Type: AWS::EC2::Subnet::Id
-    Description: 'Subnet ID for EC2 instance 1'
-  SubnetId2:
-    Type: AWS::EC2::Subnet::Id
-    Description: 'Subnet ID for EC2 instance 2'
-
 Resources:
+
+  # --- VPC ---
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSVPC'
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  MyVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MyRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+
+  MyDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MyVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref MyRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  MySubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSSubnet1'
+
+  MySubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSSubnet2'
+
+  MySubnet1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MySubnet1
+      RouteTableId: !Ref MyRouteTable
+
+  MySubnet2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MySubnet2
+      RouteTableId: !Ref MyRouteTable
 
   # --- IAM: Required so EC2 instances can register with ECS ---
   ECSInstanceRole:
@@ -33,6 +86,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
   ECSInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -51,12 +105,8 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: 'Allow SSH and HTTP access'
-      VpcId: !Ref VpcId
+      VpcId: !Ref MyVPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: '0.0.0.0/0'  # Restrict to your IP in production
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -68,11 +118,10 @@ Resources:
     Properties:
       InstanceType: 't3.small'
       ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
-      KeyName: !Ref KeyName
       IamInstanceProfile: !Ref ECSInstanceProfile
       SecurityGroupIds:
         - !Ref MySecurityGroup
-      SubnetId: !Ref SubnetId1
+      SubnetId: !Ref MySubnet1
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -87,11 +136,10 @@ Resources:
     Properties:
       InstanceType: 't3.small'
       ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
-      KeyName: !Ref KeyName
       IamInstanceProfile: !Ref ECSInstanceProfile
       SecurityGroupIds:
         - !Ref MySecurityGroup
-      SubnetId: !Ref SubnetId2
+      SubnetId: !Ref MySubnet2
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
