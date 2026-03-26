@@ -288,6 +288,33 @@ aws ecs deregister-task-definition --task-definition hello-world-task:N --region
 
 ---
 
+### Amazon Linux 2 AMIs for Upgrade Exercise
+
+The stack intentionally starts on the oldest available AL2 AMI. The table below lists available AMIs as of 2026-03-27, ordered oldest to newest — use these as the upgrade path.
+
+| AMI ID | Version | Date | Role |
+|---|---|---|---|
+| `ami-0fcb14c72c80bdef2` | 2.0.20260105.1 | 2026-01-02 | **Starting point (current in template)** |
+| `ami-0771b6766e1e61632` | 2.0.20260109.1 | 2026-01-09 | |
+| `ami-026992d753d5622bc` | 2.0.20260120.1 | 2026-01-16 | |
+| `ami-0e349888043265b96` | 2.0.20260202.2 | 2026-02-04 | |
+| `ami-0199fa5fada510433` | 2.0.20260216.0 | 2026-02-13 | **Upgrade target** |
+
+To refresh this list at any time (AWS periodically adds and removes AMIs):
+
+```bash
+aws ec2 describe-images \
+  --owners amazon \
+  --filters "Name=name,Values=amzn2-ami-hvm-2.0.*-x86_64-gp2" \
+  --query "sort_by(Images, &CreationDate)[*].{Name:Name,ImageId:ImageId,CreationDate:CreationDate}" \
+  --region us-east-1 \
+  --output table
+```
+
+To trigger an AMI upgrade, update `ImageId` in `MyLaunchTemplate` in [cf/ecs-ec2-multi-node-cf.yaml](cf/ecs-ec2-multi-node-cf.yaml) and redeploy — the ASG rolling update policy handles the rest.
+
+---
+
 ### Cost Notes
 
 | Resource | Cost |
