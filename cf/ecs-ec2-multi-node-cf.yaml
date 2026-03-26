@@ -1,5 +1,5 @@
 # ECS Cluster — 2 t3.small EC2 instances (ASG-managed) each running 1 nginx task.
-# AMI is intentionally old Amazon Linux 2 — for AMI upgrade testing.
+# AMI is intentionally the oldest available Amazon Linux 2 (ami-0fcb14c72c80bdef2 / 2.0.20260105.1) — starting point for AMI upgrade exercise.
 # See README.md for concept explanations (ASG rolling upgrades, EFS log persistence, SSM access).
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'ECS Cluster with ASG-managed EC2 instances and EFS-backed log persistence.'
@@ -157,7 +157,7 @@ Resources:
     Properties:
       LaunchTemplateData:
         InstanceType: 't3.small'
-        ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
+        ImageId: 'ami-0fcb14c72c80bdef2'  # amzn2-ami-hvm-2.0.20260105.1 — oldest available AL2, intentional starting point for AMI upgrade exercise
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
         SecurityGroupIds:
