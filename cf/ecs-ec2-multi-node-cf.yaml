@@ -1,0 +1,253 @@
+# ECS Cluster — 2 t3.small EC2 instances (ASG-managed) each running 1 nginx task.
+# AMI is intentionally old Amazon Linux 2 — for AMI upgrade testing.
+# See README.md for concept explanations (ASG rolling upgrades, EFS log persistence, SSM access).
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Cluster with ASG-managed EC2 instances and EFS-backed log persistence.'
+
+Resources:
+
+  # --- VPC ---
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSVPC'
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  MyVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MyRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+
+  MyDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MyVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref MyRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  # Two subnets in separate AZs — each subnet is pinned to one physical AZ.
+  # The ASG spreads instances across both so a single AZ failure only takes down one instance.
+  MySubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSSubnet1'
+
+  MySubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'MyECSSubnet2'
+
+  MySubnet1RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MySubnet1
+      RouteTableId: !Ref MyRouteTable
+
+  MySubnet2RouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MySubnet2
+      RouteTableId: !Ref MyRouteTable
+
+  # --- IAM: Required so EC2 instances can register with ECS ---
+  ECSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: 'ECSInstanceRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore  # SSM shell access — no SSH/key pair needed
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ECSInstanceRole
+
+  # --- ECS Cluster ---
+  MyECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: 'MyECSCluster'
+
+  # --- Security Groups ---
+  MyEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow HTTP access to EC2 instances'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+
+  # EFS security group: NFS (2049) from EC2 instances only
+  MyEFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow NFS access to EFS from EC2 instances'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref MyEC2SecurityGroup
+
+  # --- EFS: Shared log storage (persists across instance replacements) ---
+  MyEFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+
+  # One mount target per subnet/AZ
+  MyEFSMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref MyEFSFileSystem
+      SubnetId: !Ref MySubnet1
+      SecurityGroups:
+        - !Ref MyEFSSecurityGroup
+
+  MyEFSMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref MyEFSFileSystem
+      SubnetId: !Ref MySubnet2
+      SecurityGroups:
+        - !Ref MyEFSSecurityGroup
+
+  # --- LaunchTemplate: blueprint for ASG instances. Update ImageId here to trigger rolling AMI upgrade. ---
+  MyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: 't3.small'
+        ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
+        IamInstanceProfile:
+          Arn: !GetAtt ECSInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref MyEC2SecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # Install ECS agent
+            amazon-linux-extras install -y ecs
+            echo "ECS_CLUSTER=MyECSCluster" >> /etc/ecs/ecs.config
+            systemctl enable --now ecs
+
+            # Mount EFS — logs persist across instance replacements
+            yum install -y amazon-efs-utils
+            mkdir -p /ecs/logs/nginx
+            echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev 0 0" >> /etc/fstab
+            mount -a
+
+  # --- ASG: rolling update replaces one instance at a time, keeps min 1 running ---
+  MyASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - MyEFSMountTarget1
+      - MyEFSMountTarget2
+    Properties:
+      MinSize: '2'
+      MaxSize: '3'  # Temporarily allows 3 during rolling upgrade (2 running + 1 new)
+      DesiredCapacity: '2'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate
+        Version: !GetAtt MyLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref MySubnet1
+        - !Ref MySubnet2
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: 1
+        PauseTime: PT2M
+
+  # --- ECS Task Definition: bridge networking, nginx logs mapped to EFS via host volume ---
+  MyTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: 'hello-world-task'
+      NetworkMode: bridge
+      Volumes:
+        - Name: nginx-logs
+          Host:
+            SourcePath: '/ecs/logs/nginx'  # On EC2 host, backed by EFS mount
+      ContainerDefinitions:
+        - Name: 'hello-world-container'
+          Image: 'nginx:latest'
+          Memory: 128
+          Cpu: 256
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          MountPoints:
+            - SourceVolume: nginx-logs
+              ContainerPath: '/var/log/nginx'  # nginx writes logs here inside the container
+
+  # --- ECS Service: 2 tasks spread across 2 EC2 instances ---
+  MyService:
+    Type: AWS::ECS::Service
+    DependsOn: MyASG
+    Properties:
+      Cluster: !Ref MyECSCluster
+      DesiredCount: 2
+      TaskDefinition: !Ref MyTaskDefinition
+      LaunchType: EC2
+      PlacementStrategies:
+        - Type: spread
+          Field: instanceId  # Spreads tasks across instances — 1 task per EC2
+
+Outputs:
+  ClusterName:
+    Description: 'Name of the ECS Cluster'
+    Value: !Ref MyECSCluster
+  EFSFileSystemId:
+    Description: 'EFS File System ID (logs persist here across instance replacements)'
+    Value: !Ref MyEFSFileSystem
+  ASGName:
+    Description: 'Auto Scaling Group name'
+    Value: !Ref MyASG
+  TaskDefinitionArn:
+    Description: 'ARN of the Task Definition'
+    Value: !Ref MyTaskDefinition
+  ServiceName:
+    Description: 'Name of the ECS Service'
+    Value: !Ref MyService

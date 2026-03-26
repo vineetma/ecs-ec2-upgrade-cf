@@ -8,8 +8,8 @@ AWS ECS infrastructure built with CloudFormation. Learning path: smoke test → 
 
 | File | Purpose | Status |
 |---|---|---|
-| `aws-ecs/ec2-hello-world.yaml` | Smoke test — self-contained VPC + EC2 + nginx | Complete |
-| `aws-ecs/cloud-formation.yaml` | Full ECS cluster — 2x t3.small, MyECSCluster, 2 nginx tasks | Complete |
+| `cf/ec2-hello-world.yaml` | Smoke test — self-contained VPC + EC2 + nginx | Complete |
+| `cf/cloud-formation.yaml` | Full ECS cluster — 2x t3.small, MyECSCluster, 2 nginx tasks | Complete |
 
 ## Constraints
 
