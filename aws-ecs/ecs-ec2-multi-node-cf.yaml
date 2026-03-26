@@ -1,0 +1,151 @@
+# ECS Cluster with 2 t3.small EC2 instances, each running 1 nginx hello-world container task.
+# AMI is intentionally an older Amazon Linux 2 version to test the EC2 AMI upgrade process later.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Cluster with 2 t3.small EC2 instances, each running 1 container task.'
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'EC2 Key Pair name for SSH access'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC ID where resources will be created'
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Subnet ID for EC2 instance 1'
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Subnet ID for EC2 instance 2'
+
+Resources:
+
+  # --- IAM: Required so EC2 instances can register with ECS ---
+  ECSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: 'ECSInstanceRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ECSInstanceRole
+
+  # --- ECS Cluster ---
+  MyECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: 'MyECSCluster'
+
+  # --- Security Group ---
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow SSH and HTTP access'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'  # Restrict to your IP in production
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+
+  # --- EC2 Instance 1 ---
+  MyEC2Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: 't3.small'
+      ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref ECSInstanceProfile
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      SubnetId: !Ref SubnetId1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Install ECS agent on Amazon Linux 2
+          amazon-linux-extras install -y ecs
+          echo "ECS_CLUSTER=MyECSCluster" >> /etc/ecs/ecs.config
+          systemctl enable --now ecs
+
+  # --- EC2 Instance 2 ---
+  MyEC2Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: 't3.small'
+      ImageId: 'ami-0c55b159cbfafe1f0'  # Old Amazon Linux 2 AMI (intentional — for AMI upgrade testing)
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref ECSInstanceProfile
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      SubnetId: !Ref SubnetId2
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Install ECS agent on Amazon Linux 2
+          amazon-linux-extras install -y ecs
+          echo "ECS_CLUSTER=MyECSCluster" >> /etc/ecs/ecs.config
+          systemctl enable --now ecs
+
+  # --- ECS Task Definition ---
+  # Uses bridge networking (no extra ENI cost, simpler for EC2 launch type without ALB)
+  MyTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: 'hello-world-task'
+      NetworkMode: bridge  # bridge is correct for EC2 launch type without awsvpc requirement
+      ContainerDefinitions:
+        - Name: 'hello-world-container'
+          Image: 'nginx:latest'  # nginx serves HTTP on port 80 (hello-world exits immediately — not suitable for a service)
+          Memory: 128
+          Cpu: 256
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+
+  # --- ECS Service: 2 tasks spread across 2 EC2 instances ---
+  MyService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - MyEC2Instance1
+      - MyEC2Instance2
+    Properties:
+      Cluster: !Ref MyECSCluster
+      DesiredCount: 2  # 1 task per EC2 instance
+      TaskDefinition: !Ref MyTaskDefinition
+      LaunchType: EC2
+      PlacementStrategies:
+        - Type: spread
+          Field: instanceId  # Ensures 1 task per instance
+
+Outputs:
+  ClusterName:
+    Description: 'Name of the ECS Cluster'
+    Value: !Ref MyECSCluster
+  EC2Instance1Id:
+    Description: 'ID of EC2 instance 1'
+    Value: !Ref MyEC2Instance1
+  EC2Instance2Id:
+    Description: 'ID of EC2 instance 2'
+    Value: !Ref MyEC2Instance2
+  TaskDefinitionArn:
+    Description: 'ARN of the Task Definition'
+    Value: !Ref MyTaskDefinition
+  ServiceName:
+    Description: 'Name of the ECS Service'
+    Value: !Ref MyService

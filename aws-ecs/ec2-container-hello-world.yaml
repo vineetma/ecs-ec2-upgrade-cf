@@ -1,0 +1,118 @@
+# Step 1 smoke test: minimal EC2 instance running an nginx container via Docker.
+# Purpose: validate CloudFormation basics before moving on to the full ECS setup.
+# Cost: t2.micro is free-tier eligible. Creates its own VPC — no pre-existing infrastructure needed.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Minimal EC2 instance running a hello-world nginx container. CloudFormation smoke test.'
+
+Parameters:
+  KeyName:
+    Type: String
+    Default: ''
+    Description: 'EC2 Key Pair name for SSH access (optional — leave blank if not needed)'
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: 'Latest Amazon Linux 2023 AMI (auto-resolved via SSM — do not change)'
+
+Conditions:
+  HasKeyName: !Not [!Equals [!Ref KeyName, '']]
+
+Resources:
+
+  # ── Networking ──────────────────────────────────────────────────────────────
+
+  HelloWorldVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: hello-world-vpc
+
+  HelloWorldSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref HelloWorldVPC
+      CidrBlock: '10.0.1.0/24'
+      MapPublicIpOnLaunch: true   # auto-assigns public IP to the EC2 instance
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: hello-world-subnet
+
+  HelloWorldIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: hello-world-igw
+
+  HelloWorldIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref HelloWorldVPC
+      InternetGatewayId: !Ref HelloWorldIGW
+
+  HelloWorldRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref HelloWorldVPC
+
+  HelloWorldRoute:
+    Type: AWS::EC2::Route
+    DependsOn: HelloWorldIGWAttachment
+    Properties:
+      RouteTableId: !Ref HelloWorldRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref HelloWorldIGW
+
+  HelloWorldSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref HelloWorldSubnet
+      RouteTableId: !Ref HelloWorldRouteTable
+
+  # ── Security Group ───────────────────────────────────────────────────────────
+
+  HelloWorldSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow HTTP access on port 80'
+      VpcId: !Ref HelloWorldVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+
+  # ── EC2 Instance ─────────────────────────────────────────────────────────────
+
+  HelloWorldEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: 't2.micro'        # Free-tier eligible
+      ImageId: !Ref LatestAmiId       # Latest Amazon Linux 2023 AMI via SSM
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref AWS::NoValue]
+      SubnetId: !Ref HelloWorldSubnet
+      SecurityGroupIds:
+        - !Ref HelloWorldSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y docker
+          systemctl start docker
+          docker run -d -p 80:80 nginx:latest
+
+Outputs:
+  InstanceId:
+    Description: 'EC2 Instance ID'
+    Value: !Ref HelloWorldEC2
+  PublicIP:
+    Description: 'Public IP address'
+    Value: !GetAtt HelloWorldEC2.PublicIp
+  URL:
+    Description: 'Open this in a browser to verify the container is running'
+    Value: !Sub 'http://${HelloWorldEC2.PublicIp}'
