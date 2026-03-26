@@ -261,6 +261,24 @@ aws cloudformation describe-stacks \
   --region us-east-1
 ```
 
+### Troubleshoot — view stack events
+
+Stack events show what happened during create, update, or rollback. Most useful when a deploy fails — look for `CREATE_FAILED` or `UPDATE_FAILED` entries and their `ResourceStatusReason`.
+
+```bash
+# All events (most recent first)
+aws cloudformation describe-stack-events \
+  --stack-name my-ecs-stack \
+  --region us-east-1
+
+# Failures only — filters to just the error lines
+aws cloudformation describe-stack-events \
+  --stack-name my-ecs-stack \
+  --region us-east-1 \
+  --query "StackEvents[?contains(ResourceStatus,'FAILED')].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}" \
+  --output table
+```
+
 ---
 
 ### Clean Up
