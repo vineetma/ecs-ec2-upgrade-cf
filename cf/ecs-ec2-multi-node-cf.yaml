@@ -165,8 +165,8 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            # Install ECS agent
-            amazon-linux-extras install -y ecs
+            # Install ECS agent (yum method works reliably on AL2 2.0.20260105+)
+            yum install -y amazon-ecs-init
             echo "ECS_CLUSTER=MyECSCluster" >> /etc/ecs/ecs.config
             systemctl enable --now ecs
 
