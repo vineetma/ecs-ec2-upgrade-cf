@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ECS App</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 2em; }
+    h2 { color: #e94560; margin-bottom: 0.75em; }
+    .card { background: #16213e; border: 2px solid #0f3460; border-radius: 8px; padding: 1.5em; margin-bottom: 1.5em; max-width: 700px; }
+
+    /* Node info */
+    .info-table { width: 100%; border-collapse: collapse; }
+    .info-table td { padding: 6px 4px; border-bottom: 1px solid #0f3460; }
+    .info-table td:first-child { color: #888; width: 130px; }
+    .info-table td:last-child { color: #00d4ff; font-weight: bold; }
+
+    /* Form */
+    .form-row { display: flex; gap: 0.75em; margin-bottom: 0.75em; flex-wrap: wrap; }
+    input[type="text"] {
+      flex: 1; min-width: 120px; background: #0f3460; border: 1px solid #e94560;
+      color: #e0e0e0; padding: 0.5em 0.75em; border-radius: 4px; font-family: monospace; font-size: 0.95em;
+    }
+    input[type="text"]::placeholder { color: #666; }
+    button {
+      background: #e94560; color: #fff; border: none; padding: 0.5em 1.5em;
+      border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 0.95em;
+    }
+    button:hover { background: #c73652; }
+    .msg { margin-top: 0.5em; font-size: 0.85em; min-height: 1.2em; }
+    .msg.ok  { color: #00d4ff; }
+    .msg.err { color: #e94560; }
+
+    /* Records table */
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: #888; padding: 6px 8px; border-bottom: 2px solid #0f3460; }
+    td { padding: 6px 8px; border-bottom: 1px solid #0f3460; }
+    tr:last-child td { border-bottom: none; }
+    .empty { color: #555; font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <!-- Node info -->
+  <div class="card">
+    <h2>Node Info</h2>
+    <table class="info-table" id="info-table">
+      <tr><td>Instance ID</td>  <td id="i-instanceId">…</td></tr>
+      <tr><td>Private IP</td>   <td id="i-localIp">…</td></tr>
+      <tr><td>AZ</td>           <td id="i-az">…</td></tr>
+      <tr><td>AMI ID</td>       <td id="i-amiId">…</td></tr>
+      <tr><td>Container ID</td> <td id="i-containerId">…</td></tr>
+    </table>
+  </div>
+
+  <!-- Add record form -->
+  <div class="card">
+    <h2>Add Record</h2>
+    <div class="form-row">
+      <input type="text" id="f-name"    placeholder="Name" />
+      <input type="text" id="f-city"    placeholder="City" />
+      <input type="text" id="f-company" placeholder="Company" />
+      <button onclick="addRecord()">Add</button>
+    </div>
+    <div class="msg" id="form-msg"></div>
+  </div>
+
+  <!-- Records table -->
+  <div class="card">
+    <h2>Records</h2>
+    <table>
+      <thead>
+        <tr><th>Name</th><th>City</th><th>Company</th><th>Saved At</th></tr>
+      </thead>
+      <tbody id="records-body">
+        <tr><td colspan="4" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Load node info
+    fetch('/api/info')
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('i-instanceId').textContent  = d.instanceId;
+        document.getElementById('i-localIp').textContent     = d.localIp;
+        document.getElementById('i-az').textContent          = d.az;
+        document.getElementById('i-amiId').textContent       = d.amiId;
+        document.getElementById('i-containerId').textContent = d.containerId;
+      });
+
+    // Load and render records
+    function loadRecords() {
+      fetch('/api/records')
+        .then(r => r.json())
+        .then(records => {
+          const tbody = document.getElementById('records-body');
+          if (records.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="empty">No records yet.</td></tr>';
+            return;
+          }
+          tbody.innerHTML = records.map(r => `
+            <tr>
+              <td>${esc(r.name)}</td>
+              <td>${esc(r.city)}</td>
+              <td>${esc(r.company)}</td>
+              <td>${esc(r.savedAt)}</td>
+            </tr>`).join('');
+        });
+    }
+
+    // Add a record
+    function addRecord() {
+      const name    = document.getElementById('f-name').value.trim();
+      const city    = document.getElementById('f-city').value.trim();
+      const company = document.getElementById('f-company').value.trim();
+      const msg     = document.getElementById('form-msg');
+
+      if (!name || !city || !company) {
+        msg.textContent = 'All three fields are required.';
+        msg.className = 'msg err';
+        return;
+      }
+
+      fetch('/api/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, city, company }),
+      })
+      .then(r => r.json())
+      .then(() => {
+        document.getElementById('f-name').value    = '';
+        document.getElementById('f-city').value    = '';
+        document.getElementById('f-company').value = '';
+        msg.textContent = 'Record saved.';
+        msg.className = 'msg ok';
+        loadRecords();
+        setTimeout(() => { msg.textContent = ''; }, 2000);
+      })
+      .catch(() => {
+        msg.textContent = 'Failed to save record.';
+        msg.className = 'msg err';
+      });
+    }
+
+    // Escape HTML to prevent XSS
+    function esc(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    loadRecords();
+  </script>
+</body>
+</html>
