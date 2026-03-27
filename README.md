@@ -277,6 +277,27 @@ aws cloudformation describe-stack-events \
   --region us-east-1 \
   --query "StackEvents[?contains(ResourceStatus,'FAILED')].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}" \
   --output table
+
+# Watch events live during deploy (poll every 10s) — run in a second terminal
+watch -n 10 'aws cloudformation describe-stack-events \
+  --stack-name my-ecs-stack --region us-east-1 \
+  --query "StackEvents[:5].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus}" \
+  --output table'
+```
+
+### Troubleshoot — verify ECS instances registered
+
+If the ECS service reports "no container instances", the EC2 instances booted but the ECS agent failed to register. Check:
+
+```bash
+# Should return 2 instance ARNs once instances are healthy (~5 min after stack create)
+aws ecs list-container-instances --cluster MyECSCluster --region us-east-1
+
+# If empty, check UserData execution log on the instance
+# EC2 Console → instance → Actions → Monitor and troubleshoot → Get system log
+# Or read directly if SSM is available:
+aws ssm start-session --target <instance-id> --region us-east-1
+# then: cat /var/log/userdata.log
 ```
 
 ---
