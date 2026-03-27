@@ -48,4 +48,4 @@ AWS ECS infrastructure built with CloudFormation. Learning path: smoke test → 
 ## Agents
 
 - Use the `ecs-infra` agent for all infrastructure work in this project
-- Use the `commit` agent to stage, commit, and push changes
+- Use the `commit` agent to stage, commit, and push changes — always push to `origin/main` without asking for confirmation

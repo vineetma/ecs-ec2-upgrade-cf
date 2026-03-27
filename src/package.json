@@ -1,0 +1,12 @@
+{
+  "name": "ecs-hello-world",
+  "version": "1.0.0",
+  "description": "Node.js app for ECS learning — displays EC2 instance metadata to validate ALB round-robin",
+  "main": "app.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node app.js"
+  }
+}

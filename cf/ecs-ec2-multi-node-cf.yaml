@@ -1,8 +1,14 @@
-# ECS Cluster — 2 t3.small EC2 instances (ASG-managed) each running 1 nginx task.
-# AMI is intentionally the oldest available Amazon Linux 2 (ami-0fcb14c72c80bdef2 / 2.0.20260105.1) — starting point for AMI upgrade exercise.
+# ECS Cluster — 2 t3.small EC2 instances (ASG-managed) each running 1 Node.js task.
+# AMI is intentionally the oldest available Amazon Linux 2 — starting point for AMI upgrade exercise.
 # See README.md for concept explanations (ASG rolling upgrades, EFS log persistence, SSM access).
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'ECS Cluster with ASG-managed EC2 instances, EFS-backed log persistence, and an ALB for round-robin traffic.'
+
+Parameters:
+  AppImage:
+    Type: String
+    Default: 'YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest'
+    Description: 'Docker Hub image for the Node.js app. Build and push with: docker build -t ecs-hello-world . && docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest'
 
 Resources:
 
@@ -292,24 +298,20 @@ Resources:
     Properties:
       Family: 'hello-world-task'
       NetworkMode: bridge
-      Volumes:
-        - Name: nginx-logs
-          Host:
-            SourcePath: '/ecs/logs/nginx'  # On EC2 host, backed by EFS mount
       ContainerDefinitions:
         - Name: 'hello-world-container'
-          Image: 'nginx:latest'
-          Memory: 128
+          Image: !Ref AppImage
+          Memory: 256
           Cpu: 256
           Essential: true
+          Environment:
+            - Name: PORT
+              Value: '3000'
           PortMappings:
-            - ContainerPort: 80
-              HostPort: 80  # Fixed port: 1 task per host, so no port conflict. ALB registers instance:80.
+            - ContainerPort: 3000
+              HostPort: 80  # ALB target group registers instance:80; host maps 80 → container 3000
               Protocol: tcp
-          StopTimeout: 10  # SIGTERM → wait 10s → SIGKILL. Prevents indefinite wait when nginx ignores SIGTERM as PID 1.
-          MountPoints:
-            - SourceVolume: nginx-logs
-              ContainerPath: '/var/log/nginx'  # nginx writes logs here inside the container
+          StopTimeout: 10  # Node.js handles SIGTERM cleanly; 10s is more than enough
 
   # --- ECS Service: 2 tasks spread across 2 EC2 instances, registered with ALB target group ---
   # DependsOn MyListener: ECS service requires the listener to exist before it can register tasks

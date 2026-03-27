@@ -3,7 +3,9 @@
     "allow": [
       "Bash(git push:*)",
       "Bash(git commit:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
     ]
   }
 }

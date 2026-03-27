@@ -340,7 +340,19 @@ aws ssm start-session --target <instance-id> --region us-east-1
 ### Clean Up
 
 ```bash
-# Delete the stack (removes VPC, EFS, ASG, ECS cluster — everything)
+# Step 1: Scale ECS service to 0 before deleting — bypasses the 300s ALB deregistration drain
+# and prevents the ECS service DELETE_FAILED timeout that occurs when tasks are still running.
+CLUSTER=$(aws cloudformation describe-stack-resources --stack-name my-ecs-stack \
+  --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId" --output text)
+SERVICE=$(aws cloudformation describe-stack-resources --stack-name my-ecs-stack \
+  --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" --output text)
+
+aws ecs update-service --cluster $CLUSTER --service $SERVICE --desired-count 0
+
+# Wait ~30s for tasks to drain, then delete the stack
+sleep 30
+
+# Step 2: Delete the stack (removes VPC, EFS, ASG, ECS cluster — everything)
 aws cloudformation delete-stack \
   --stack-name my-ecs-stack \
   --region us-east-1

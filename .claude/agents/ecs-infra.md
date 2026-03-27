@@ -88,15 +88,36 @@ echo "ECS_CLUSTER=MyClusterName" > /etc/ecs/ecs.config
 
 The `ecs.service` is already `enabled` (`WantedBy=multi-user.target`). It starts automatically after `cloud-final.service` finishes.
 
-### EFS mounts — always use `nofail`
-EFS DNS may not be resolvable at the exact moment UserData runs. A hard mount failure will cause UserData to exit non-zero and can block other setup steps.
+### Keep UserData minimal — use SSM State Manager for software installation
 
-```bash
-echo "${EFSFileSystemId}:/ /mount/path efs defaults,_netdev,nofail 0 0" >> /etc/fstab
-mount -a || echo "EFS mount failed — will retry on reconnect (nofail set)"
+UserData should contain **only** what must happen before the ECS agent starts (i.e. writing `/etc/ecs/ecs.config`). Everything else — package installs, EFS mounts, directory creation — belongs in an `AWS::SSM::Association` resource.
+
+**Why:** UserData is opaque, doesn't re-run on replacement without template changes, and conflates boot-time requirements with software setup. SSM associations are visible in the console, re-runnable, and auditable.
+
+**Pattern:**
+```yaml
+MySetupAssociation:
+  Type: AWS::SSM::Association
+  DependsOn: MyASG
+  Properties:
+    AssociationName: !Sub '${AWS::StackName}-setup'
+    Name: AWS-RunShellScript
+    Targets:
+      - Key: 'tag:aws:cloudformation:stack-name'
+        Values:
+          - !Sub '${AWS::StackName}'
+    Parameters:
+      commands:
+        - 'yum install -y amazon-efs-utils'
+        - 'mkdir -p /mount/path'
+        - !Sub 'grep -q "${EFSId}" /etc/fstab || echo "${EFSId}:/ /mount/path efs defaults,_netdev,nofail 0 0" >> /etc/fstab'
+        - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
+    WaitForSuccessTimeoutSeconds: 300
 ```
 
-`nofail` ensures a mount failure at boot does not block the rest of the boot process.
+- Use `grep -q` before appending to `/etc/fstab` to make the script idempotent
+- SSM runs ~60s after boot — ECS tasks may fail first placement and be retried; `HealthCheckGracePeriodSeconds: 60` on the ECS service provides enough buffer
+- Targeting by `tag:aws:cloudformation:stack-name` ensures new ASG instances are automatically covered without updating the association
 
 ## Current Project Context
 
@@ -111,8 +132,9 @@ Templates:
 Current stack state (`my-ecs-stack`):
 - ECS-optimized AMI `ami-0dc67873410203528` (2024-03-28) — starting point for AMI upgrade exercise
 - 2 `t3.small` instances across 2 AZs, managed by ASG with rolling update policy
-- EFS-backed nginx log persistence
-- No ALB (cost saving)
+- EFS-backed nginx log persistence (mounted via SSM State Manager, not UserData)
+- ALB included — internet-facing, round-robins across both ECS tasks; `deregistration_delay: 30s`
+- EC2 port 80 locked to ALB security group only (not open to internet directly)
 - VPC + subnets + IGW all stack-owned (no external networking needed)
 - Planned exercise: roll AMI upgrades through the table in README.md up to `ami-07bb74bad4a7a0b7a` (2026-03-23)
 
