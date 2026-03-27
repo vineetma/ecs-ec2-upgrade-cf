@@ -207,6 +207,21 @@ It is possible to use a single subnet (both instances in the same AZ), but losin
 
 ---
 
+#### Traffic distribution — no ALB, direct IP per instance
+
+There is no load balancer in this setup (intentionally omitted to minimise cost). Traffic is **not centrally routed** — each EC2 instance has its own public IP and serves requests independently.
+
+The `PlacementStrategies: spread by instanceId` in the ECS service is about **task placement**, not request routing — it guarantees ECS places exactly 1 nginx task per EC2 instance, not that requests are distributed between them.
+
+```
+Client → http://<ip1>  →  EC2 Instance 1 → nginx container (task 1)
+Client → http://<ip2>  →  EC2 Instance 2 → nginx container (task 2)
+```
+
+To reach both instances you must know both IPs. An ALB would provide a single DNS name and route across both — but adds cost (~$0.008/hr + LCU charges).
+
+---
+
 #### EC2 access — SSM over SSH
 
 No key pair or port 22 is used. Shell access is available via SSM Session Manager with no open ports:
@@ -347,9 +362,13 @@ Run these after the stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE` to confirm e
 aws ecs list-container-instances --cluster MyECSCluster --region us-east-1
 
 # 2. Confirm service is running 2/2 tasks
+# First, get the actual service ARN (CloudFormation appends a random suffix to the logical name)
+aws ecs list-services --cluster MyECSCluster --region us-east-1
+
+# Then use the ARN from the output above
 aws ecs describe-services \
   --cluster MyECSCluster \
-  --services MyService \
+  --services <service-arn> \
   --query "services[0].{Running:runningCount,Desired:desiredCount,Pending:pendingCount,Status:status}" \
   --region us-east-1
 
@@ -365,6 +384,19 @@ aws ecs describe-tasks \
 ```
 
 **Expected state:** 2 container instances registered, service shows `runningCount: 2`, tasks in `RUNNING` status.
+
+```bash
+# 5. Validate both instances are serving traffic — get public IPs, then curl each
+aws ec2 describe-instances \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+            "Name=instance-state-name,Values=running" \
+  --query "Reservations[*].Instances[*].PublicIpAddress" \
+  --output text --region us-east-1
+
+# Hit each IP — both should return the nginx welcome page
+curl http://<ip1>
+curl http://<ip2>
+```
 
 #### Things to explore before the AMI upgrade exercise
 
@@ -495,13 +527,62 @@ aws ec2 describe-instances \
   --output table --region us-east-1
 
 # Confirm ECS service stayed at 2 running tasks throughout
+# First, get the actual service ARN (CloudFormation appends a random suffix to the logical name)
+aws ecs list-services --cluster MyECSCluster --region us-east-1
+
+# Then use the ARN from the output above
 aws ecs describe-services \
-  --cluster MyECSCluster --services MyService \
+  --cluster MyECSCluster --services <service-arn> \
   --query "services[0].{Running:runningCount,Desired:desiredCount}" \
   --region us-east-1
 ```
 
 Both instances should show the new AMI ID. `runningCount` should be 2 throughout the update (never dropped to 0 — that's the point of `MinInstancesInService: 1`).
+
+---
+
+### Container-Only Updates (no AMI change)
+
+To update the running container image without touching EC2 instances or the AMI:
+
+#### If using a versioned image tag (e.g. `nginx:1.27`)
+
+Update the `Image` field in `MyTaskDefinition` in the template:
+
+```yaml
+# ecs-ec2-multi-node-cf.yaml — MyTaskDefinition
+Image: 'nginx:1.27'  # <- change version here
+```
+
+Then deploy:
+
+```bash
+aws cloudformation deploy \
+  --template-file cf/ecs-ec2-multi-node-cf.yaml \
+  --stack-name my-ecs-stack \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
+
+CloudFormation creates a new task definition revision and ECS rolls it out automatically.
+
+#### If using `nginx:latest` (current setup)
+
+The tag never changes in the template so CloudFormation sees no diff and will not trigger a redeployment. Use `--force-new-deployment` to make ECS pull and restart with the latest image:
+
+```bash
+# 1. Get the service ARN
+aws ecs list-services --cluster MyECSCluster --region us-east-1
+
+# 2. Force ECS to pull the latest image and restart tasks
+aws ecs update-service \
+  --cluster MyECSCluster \
+  --service <service-arn> \
+  --force-new-deployment \
+  --region us-east-1
+```
+
+ECS will stop old tasks and start new ones pulling the fresh image — no instance replacement, no AMI change.
 
 ---
 
