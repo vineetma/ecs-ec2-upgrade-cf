@@ -13,11 +13,12 @@ AWS ECS infrastructure built with CloudFormation. Learning path: smoke test → 
 
 ## Constraints
 
-- **No ALB** — intentionally omitted to minimize costs
+- **ALB included** — internet-facing, spans both public subnets, round-robins across both ECS tasks; costs ~$0.008/hr base
 - **EC2 launch type** — not Fargate
 - **ECS-optimized AMI** — `ami-0dc67873410203528` (2024-03-28) is deliberately old — AMI rolling upgrade is a planned exercise
 - **VPC is stack-owned** — created inside the template (VPC, IGW, 2 subnets, route table); no pre-existing networking required
 - **No SSH / no key pairs** — use SSM Session Manager; `AmazonSSMManagedInstanceCore` is attached to the instance role
+- **EC2 instances not directly internet-accessible on port 80** — EC2 security group allows port 80 from ALB SG only
 
 ## General
 

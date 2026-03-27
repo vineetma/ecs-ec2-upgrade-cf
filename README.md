@@ -73,6 +73,7 @@ aws cloudformation wait stack-delete-complete \
 | Auto Scaling Group | 1 | 2 `t3.small` instances across 2 AZs |
 | EFS File System | 1 | Shared log storage, survives instance replacement |
 | ECS Service | 1 | 2 `nginx` tasks, spread across instances |
+| Application Load Balancer | 1 | Single DNS entry point, round-robins across both tasks |
 | IAM Role | 1 | ECS registration + SSM access (no SSH needed) |
 
 ---
@@ -207,18 +208,26 @@ It is possible to use a single subnet (both instances in the same AZ), but losin
 
 ---
 
-#### Traffic distribution — no ALB, direct IP per instance
+#### Traffic distribution — ALB round-robin across both instances
 
-There is no load balancer in this setup (intentionally omitted to minimise cost). Traffic is **not centrally routed** — each EC2 instance has its own public IP and serves requests independently.
-
-The `PlacementStrategies: spread by instanceId` in the ECS service is about **task placement**, not request routing — it guarantees ECS places exactly 1 nginx task per EC2 instance, not that requests are distributed between them.
+The ALB provides a single DNS name and distributes requests across both EC2 instances in round-robin order. Clients never need to know individual instance IPs.
 
 ```
-Client → http://<ip1>  →  EC2 Instance 1 → nginx container (task 1)
-Client → http://<ip2>  →  EC2 Instance 2 → nginx container (task 2)
+Client → ALB DNS (port 80)
+              ↓
+    ALB Listener (HTTP:80)
+              ↓
+    Target Group (instance mode)
+         /          \
+EC2 Instance 1    EC2 Instance 2
+  nginx (task 1)   nginx (task 2)
 ```
 
-To reach both instances you must know both IPs. An ALB would provide a single DNS name and route across both — but adds cost (~$0.008/hr + LCU charges).
+The `PlacementStrategies: spread by instanceId` in the ECS service is about **task placement**, not request routing — it guarantees ECS places exactly 1 nginx task per EC2 instance. Because there is 1 task per instance and the target group uses instance mode with port 80, the ALB routes to one instance per request, alternating between them.
+
+**Security:** EC2 instances are no longer directly reachable from the internet on port 80. The EC2 security group only allows port 80 from the ALB security group. All client traffic must flow through the ALB.
+
+**Cost:** ALB adds ~$0.008/hr base + LCU charges (negligible at this traffic volume). See cost table below.
 
 ---
 
@@ -242,15 +251,24 @@ aws ssm start-session --target i-xxxxxxxxxxxxxxxxx
 ### Architecture
 
 ```
+Internet
+    │  HTTP :80
+    ▼
+ALB (MyALB) — internet-facing, spans both AZs
+    │
+    │  round-robin
+    ├─────────────────────────────────┐
+    ▼                                 ▼
 VPC (10.0.0.0/16)
-├── Subnet 1 (10.0.1.0/24, AZ-0)
-│   └── EC2 Instance 1 (t3.small) ──► ECS Agent ──► nginx container (task 1)
-│                                                          ↓ /var/log/nginx
-└── Subnet 2 (10.0.2.0/24, AZ-1)                    EFS /ecs/logs/nginx
-    └── EC2 Instance 2 (t3.small) ──► ECS Agent ──► nginx container (task 2)
-                                                          ↓ /var/log/nginx
-                        Both managed by ASG          EFS /ecs/logs/nginx
-                        MyECSCluster (PlacementStrategy: spread by instanceId)
+├── Subnet 1 (10.0.1.0/24, AZ-0)    Subnet 2 (10.0.2.0/24, AZ-1)
+│   EC2 Instance 1 (t3.small)        EC2 Instance 2 (t3.small)
+│   ECS Agent                         ECS Agent
+│   nginx container (task 1)          nginx container (task 2)
+│         ↓ /var/log/nginx                  ↓ /var/log/nginx
+│         EFS /ecs/logs/nginx               EFS /ecs/logs/nginx
+│
+Both instances managed by ASG. MyECSCluster (PlacementStrategy: spread by instanceId).
+EC2 security group: port 80 from ALB only — no direct internet access to instances.
 ```
 
 ---
@@ -275,6 +293,8 @@ aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs" \
   --region us-east-1
 ```
+
+The `ALBDNSName` output contains the URL. Open it in a browser — you should see the nginx welcome page.
 
 ### Troubleshoot — view stack events
 
@@ -386,17 +406,64 @@ aws ecs describe-tasks \
 **Expected state:** 2 container instances registered, service shows `runningCount: 2`, tasks in `RUNNING` status.
 
 ```bash
-# 5. Validate both instances are serving traffic — get public IPs, then curl each
-aws ec2 describe-instances \
-  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
-            "Name=instance-state-name,Values=running" \
-  --query "Reservations[*].Instances[*].PublicIpAddress" \
-  --output text --region us-east-1
+# 5. Get the ALB DNS name from stack outputs and curl it
+ALB_URL=$(aws cloudformation describe-stacks \
+  --stack-name my-ecs-stack \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBDNSName'].OutputValue" \
+  --output text --region us-east-1)
 
-# Hit each IP — both should return the nginx welcome page
-curl http://<ip1>
-curl http://<ip2>
+curl $ALB_URL
 ```
+
+**Note:** EC2 instances are no longer directly reachable from the internet on port 80. All traffic now flows through the ALB. The individual instance public IPs are still assigned (for SSM and outbound traffic) but port 80 is blocked from the internet at the security group level.
+
+#### Validate round-robin traffic distribution
+
+The ALB distributes requests across both EC2 instances in round-robin order. Because we have 1 nginx task per instance, alternating requests go to different containers.
+
+nginx's default welcome page does not include any host identifier, so the responses look identical. To observe which instance is serving each request, check the ALB access logs or read the nginx container logs on each instance via SSM — the access log on instance 1 will show requests routed to it, and instance 2 will show the others.
+
+The simplest approach to confirm round-robin is to compare the nginx container IDs from inside each container:
+
+```bash
+# Step 1: Get the ALB DNS name
+ALB_URL=$(aws cloudformation describe-stacks \
+  --stack-name my-ecs-stack \
+  --query "Stacks[0].Outputs[?OutputKey=='ALBDNSName'].OutputValue" \
+  --output text --region us-east-1)
+
+# Step 2: Send several requests and watch the ALB target health (see which instances are hit)
+# The ALB health check confirms both targets are healthy before traffic is distributed
+aws elbv2 describe-target-health \
+  --target-group-arn $(aws elbv2 describe-target-groups \
+    --query "TargetGroups[?contains(TargetGroupName, 'MyTar')].TargetGroupArn" \
+    --output text --region us-east-1) \
+  --region us-east-1
+
+# Both targets should show HealthState: healthy before traffic reaches them.
+
+# Step 3: Hit the ALB repeatedly — the nginx welcome page is identical from both instances
+# but the access.log on each instance will record exactly which requests it served.
+for i in {1..6}; do curl -s -o /dev/null -w "Request $i: HTTP %{http_code} from %{remote_ip}\n" $ALB_URL; done
+
+# Step 4: SSM into each instance and check access.log to confirm requests were split
+# (run this in two separate SSM sessions — one per instance)
+aws ssm start-session --target <instance-1-id> --region us-east-1
+# inside instance 1:
+# docker ps                          <- find container ID
+# docker logs <container-id>        <- or: cat /ecs/logs/nginx/access.log
+# the access.log shows ALB health checks + the actual client requests routed to this instance
+
+# To observe the container ID that served a request without a custom image, exec into the container:
+aws ssm start-session --target <instance-1-id> --region us-east-1
+# inside instance 1:
+# docker exec <container-id> hostname   <- prints container hostname (short container ID)
+# docker exec <container-id> cat /etc/hostname
+```
+
+**Why the responses look the same:** The stock `nginx:latest` image serves the same welcome page regardless of which host it runs on. To surface the host identity in the HTTP response itself (without a custom image), you would exec a command override at task definition level — but that would replace the nginx process and break the server. The correct production approach is a custom image that injects `$hostname` into the response, or using the ALB access logs (requires S3 bucket configuration). For this learning exercise, the nginx access logs via SSM are sufficient to confirm distribution.
+
+---
 
 #### Things to explore before the AMI upgrade exercise
 
@@ -593,4 +660,6 @@ ECS will stop old tasks and start new ones pulling the fresh image — no instan
 | EC2 `t3.small` × 2 | ~$0.023/hr each (~$0.046/hr total) |
 | EFS | ~$0.30/GB-month (negligible for log volume) |
 | ECS Cluster | Free |
-| No ALB | Saves ~$0.008/hr + LCU charges |
+| ALB | ~$0.008/hr base + ~$0.008/LCU-hr (negligible LCU at this traffic volume — total ~$6–7/month) |
+
+**Total running cost:** ~$0.054/hr (~$39/month if left running continuously). Delete the stack when not in use.

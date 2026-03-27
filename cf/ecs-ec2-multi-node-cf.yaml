@@ -2,7 +2,7 @@
 # AMI is intentionally the oldest available Amazon Linux 2 (ami-0fcb14c72c80bdef2 / 2.0.20260105.1) — starting point for AMI upgrade exercise.
 # See README.md for concept explanations (ASG rolling upgrades, EFS log persistence, SSM access).
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ECS Cluster with ASG-managed EC2 instances and EFS-backed log persistence.'
+Description: 'ECS Cluster with ASG-managed EC2 instances, EFS-backed log persistence, and an ALB for round-robin traffic.'
 
 Resources:
 
@@ -104,16 +104,34 @@ Resources:
       ClusterName: 'MyECSCluster'
 
   # --- Security Groups ---
-  MyEC2SecurityGroup:
+
+  # ALB security group: accepts inbound HTTP from the internet.
+  # EC2 instances do NOT need to be directly reachable from the internet — all client traffic
+  # enters via the ALB, which then forwards to the EC2 instances.
+  MyALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: 'Allow HTTP access to EC2 instances'
+      GroupDescription: 'Allow inbound HTTP from the internet to the ALB'
       VpcId: !Ref MyVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: '0.0.0.0/0'
+
+  # EC2 instance security group: only allows port 80 from the ALB security group.
+  # Direct internet access to port 80 is intentionally blocked — all traffic must flow through the ALB.
+  # This is a security improvement over the previous setup that opened 0.0.0.0/0 directly.
+  MyEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow HTTP from ALB only - no direct internet access to container port'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref MyALBSecurityGroup  # ALB → EC2 only; no direct 0.0.0.0/0
 
   # EFS security group: NFS (2049) from EC2 instances only
   MyEFSSecurityGroup:
@@ -150,6 +168,51 @@ Resources:
       SubnetId: !Ref MySubnet2
       SecurityGroups:
         - !Ref MyEFSSecurityGroup
+
+  # --- ALB: single DNS entry point, distributes requests across both EC2 instances ---
+  # Cost note: ALB costs ~$0.008/hr base + LCU charges (~$0.008/LCU-hr). For this learning
+  # setup the LCU charges will be negligible. Total ALB cost ~$0.008–0.010/hr (~$6–7/month).
+  MyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref MyALBSecurityGroup
+      Subnets:
+        - !Ref MySubnet1
+        - !Ref MySubnet2
+
+  # Target group uses instance mode (not ip mode) — correct for EC2 launch type with bridge networking.
+  # ECS registers each EC2 instance + its container host port (80) with this target group automatically
+  # when tasks start, and deregisters them when tasks stop.
+  # Health check: ALB polls GET / on port 80 every 30s; 2 consecutive 200s = healthy.
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref MyVPC
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance  # EC2 launch type with bridge networking — register the instance, not the container IP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'  # Default is 300s — reduced for faster task shutdown in dev/experiment clusters
+
+  # HTTP listener: all traffic on port 80 → forwarded to the target group
+  MyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MyALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
 
   # --- LaunchTemplate: blueprint for ASG instances. Update ImageId here to trigger rolling AMI upgrade. ---
   # Using ECS-optimized AMI: ECS agent is pre-installed, no manual install needed in UserData.
@@ -205,6 +268,8 @@ Resources:
         PauseTime: PT2M
 
   # --- ECS Task Definition: bridge networking, nginx logs mapped to EFS via host volume ---
+  # HostPort 80 is fixed (not dynamic port 0) because we have exactly 1 task per EC2 instance.
+  # The ALB target group registers instances on port 80 in instance mode.
   MyTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -222,26 +287,41 @@ Resources:
           Essential: true
           PortMappings:
             - ContainerPort: 80
-              HostPort: 80
+              HostPort: 80  # Fixed port: 1 task per host, so no port conflict. ALB registers instance:80.
               Protocol: tcp
+          StopTimeout: 10  # SIGTERM → wait 10s → SIGKILL. Prevents indefinite wait when nginx ignores SIGTERM as PID 1.
           MountPoints:
             - SourceVolume: nginx-logs
               ContainerPath: '/var/log/nginx'  # nginx writes logs here inside the container
 
-  # --- ECS Service: 2 tasks spread across 2 EC2 instances ---
+  # --- ECS Service: 2 tasks spread across 2 EC2 instances, registered with ALB target group ---
+  # DependsOn MyListener: ECS service requires the listener to exist before it can register tasks
+  # with the target group (CloudFormation does not infer this dependency automatically).
+  # HealthCheckGracePeriodSeconds: gives nginx time to start before ALB health checks begin.
+  # Without this, ECS may see the first health check fail (nginx not yet up) and kill the task.
   MyService:
     Type: AWS::ECS::Service
-    DependsOn: MyASG
+    DependsOn:
+      - MyASG
+      - MyListener  # ALB listener must exist before ECS can attach to the target group
     Properties:
       Cluster: !Ref MyECSCluster
       DesiredCount: 2
       TaskDefinition: !Ref MyTaskDefinition
       LaunchType: EC2
+      HealthCheckGracePeriodSeconds: 60  # Allow 60s for nginx to start before ALB health checks count
+      LoadBalancers:
+        - ContainerName: 'hello-world-container'
+          ContainerPort: 80
+          TargetGroupArn: !Ref MyTargetGroup
       PlacementStrategies:
         - Type: spread
-          Field: instanceId  # Spreads tasks across instances — 1 task per EC2
+          Field: instanceId  # Spreads tasks across instances — 1 task per EC2, so ALB sees both
 
 Outputs:
+  ALBDNSName:
+    Description: 'ALB DNS name — open this in a browser or use with curl to validate round-robin'
+    Value: !Sub 'http://${MyALB.DNSName}'
   ClusterName:
     Description: 'Name of the ECS Cluster'
     Value: !Ref MyECSCluster
