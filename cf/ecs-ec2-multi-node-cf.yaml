@@ -267,7 +267,7 @@ Resources:
       Parameters:
         commands:
           - 'yum install -y amazon-efs-utils'
-          - 'mkdir -p /ecs/logs/nginx'
+          - 'mkdir -p /ecs/logs/nginx /ecs/logs/data'
           - !Sub 'grep -q "${MyEFSFileSystem}" /etc/fstab || echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab'
           - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
       WaitForSuccessTimeoutSeconds: 300
@@ -302,6 +302,10 @@ Resources:
     Properties:
       Family: 'hello-world-task'
       NetworkMode: bridge
+      Volumes:
+        - Name: efs-data
+          Host:
+            SourcePath: '/ecs/logs/data'  # EFS-backed — shared across all containers on all instances
       ContainerDefinitions:
         - Name: 'hello-world-container'
           Image: !Ref AppImage
@@ -311,11 +315,16 @@ Resources:
           Environment:
             - Name: PORT
               Value: '3000'
+            - Name: DATA_FILE
+              Value: '/data/records.json'  # Points to EFS mount — both containers read/write the same file
           PortMappings:
             - ContainerPort: 3000
               HostPort: 80  # ALB target group registers instance:80; host maps 80 → container 3000
               Protocol: tcp
-          StopTimeout: 10  # Node.js handles SIGTERM cleanly; 10s is more than enough
+          MountPoints:
+            - SourceVolume: efs-data
+              ContainerPath: '/data'  # EFS /ecs/logs/data mounted here inside the container
+          StopTimeout: 10
 
   # --- ECS Service: 2 tasks spread across 2 EC2 instances, registered with ALB target group ---
   # DependsOn MyListener: ECS service requires the listener to exist before it can register tasks
