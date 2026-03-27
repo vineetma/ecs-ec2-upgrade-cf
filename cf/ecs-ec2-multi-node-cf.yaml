@@ -170,9 +170,11 @@ Resources:
             # Log all output for debugging (readable via EC2 console: Actions > Monitor > Get system log)
             exec > >(tee /var/log/userdata.log) 2>&1
 
-            # ECS agent is pre-installed on ECS-optimized AMI — just set cluster and restart
+            # ECS agent is pre-installed on ECS-optimized AMI — write cluster config.
+            # Do NOT call systemctl start ecs here: ecs.service has After=cloud-final.service,
+            # so starting it from UserData (which runs inside cloud-final) causes a deadlock.
+            # systemd will auto-start ecs after cloud-final completes.
             echo "ECS_CLUSTER=MyECSCluster" > /etc/ecs/ecs.config
-            systemctl restart ecs
 
             # Mount EFS — nofail ensures EFS issues don't block ECS registration
             yum install -y amazon-efs-utils
