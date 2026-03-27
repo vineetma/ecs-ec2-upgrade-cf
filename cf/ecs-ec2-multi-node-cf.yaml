@@ -332,7 +332,12 @@ Resources:
       DesiredCount: 2
       TaskDefinition: !Ref MyTaskDefinition
       LaunchType: EC2
-      HealthCheckGracePeriodSeconds: 60  # Allow 60s for nginx to start before ALB health checks count
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0    # Required with fixed HostPort: stop old task first to free the port,
+                                    # then start new task. Without this, ECS tries to run both simultaneously
+                                    # and deadlocks because port 80 is already occupied on both instances.
+        MaximumPercent: 100         # Never exceed desired count — consistent with stop-before-start approach
       LoadBalancers:
         - ContainerName: 'hello-world-container'
           ContainerPort: 3000

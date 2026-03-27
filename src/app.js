@@ -27,15 +27,16 @@ async function getMetadata() {
     });
     const token = await tokenRes.text();
 
-    const [instanceId, localIp, az] = await Promise.all([
+    const [instanceId, localIp, az, amiId] = await Promise.all([
       imds(token, 'instance-id'),
       imds(token, 'local-ipv4'),
       imds(token, 'placement/availability-zone'),
+      imds(token, 'ami-id'),
     ]);
 
-    return { instanceId, localIp, az };
+    return { instanceId, localIp, az, amiId };
   } catch {
-    return { instanceId: 'unknown', localIp: 'unknown', az: 'unknown' };
+    return { instanceId: 'unknown', localIp: 'unknown', az: 'unknown', amiId: 'unknown' };
   }
 }
 
@@ -46,7 +47,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const { instanceId, localIp, az } = await getMetadata();
+  const { instanceId, localIp, az, amiId } = await getMetadata();
   const containerId = os.hostname();
 
   const html = `<!DOCTYPE html>
@@ -73,6 +74,7 @@ const server = http.createServer(async (req, res) => {
       <tr><td>Instance ID</td>  <td>${instanceId}</td></tr>
       <tr><td>Private IP</td>   <td>${localIp}</td></tr>
       <tr><td>AZ</td>           <td>${az}</td></tr>
+      <tr><td>AMI ID</td>       <td>${amiId}</td></tr>
       <tr><td>Container ID</td> <td>${containerId}</td></tr>
     </table>
   </div>
