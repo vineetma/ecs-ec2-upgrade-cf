@@ -309,7 +309,11 @@ aws cloudformation deploy \
 
 Replace `YOUR_DOCKERHUB_USERNAME` with your actual Docker Hub username. The `AppImage` parameter is how you swap to a new image version without editing the template — just push a new tag and redeploy with the updated `--parameter-overrides`.
 
-`--no-rollback` keeps the stack in `UPDATE_FAILED`/`CREATE_FAILED` state on error instead of rolling back — useful when debugging task startup failures so you can fix and redeploy without recreating the entire stack.
+`--no-rollback` keeps the stack in `UPDATE_FAILED`/`CREATE_FAILED` state on error instead of rolling back — useful when debugging task startup failures so you can fix and redeploy without recreating the entire stack. If the stack gets stuck and subsequent deploys are blocked, resume the rollback first:
+
+```bash
+aws cloudformation continue-update-rollback --stack-name my-ecs-stack --region us-east-1
+```
 
 ### Verify
 
