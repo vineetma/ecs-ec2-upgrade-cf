@@ -7,7 +7,7 @@ Description: 'ECS Cluster with ASG-managed EC2 instances, EFS-backed log persist
 Parameters:
   AppImage:
     Type: String
-    Default: 'YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest'
+#    Default: 'vineetma/ecs-hello-world:latest'
     Description: 'Docker Hub image for the Node.js app. Build and push with: docker build -t ecs-hello-world . && docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest'
 
 Resources:
@@ -331,7 +331,7 @@ Resources:
       HealthCheckGracePeriodSeconds: 60  # Allow 60s for nginx to start before ALB health checks count
       LoadBalancers:
         - ContainerName: 'hello-world-container'
-          ContainerPort: 80
+          ContainerPort: 3000
           TargetGroupArn: !Ref MyTargetGroup
       PlacementStrategies:
         - Type: spread
