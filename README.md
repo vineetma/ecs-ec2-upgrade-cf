@@ -327,24 +327,29 @@ aws ecs deregister-task-definition --task-definition hello-world-task:N --region
 
 ---
 
-### Amazon Linux 2 AMIs for Upgrade Exercise
+### ECS-Optimized AMIs for Upgrade Exercise
 
-The stack intentionally starts on the oldest available AL2 AMI. The table below lists available AMIs as of 2026-03-27, ordered oldest to newest — use these as the upgrade path.
+The stack uses **ECS-optimized AMIs** (not plain AL2). These have the ECS agent pre-installed — no manual installation needed in UserData. This is more reliable than installing the agent at boot time.
+
+The table below lists available ECS-optimized AL2 AMIs as of 2026-03-27, ordered oldest to newest — use these as the upgrade path.
 
 | AMI ID | Version | Date | Role |
 |---|---|---|---|
-| `ami-0fcb14c72c80bdef2` | 2.0.20260105.1 | 2026-01-02 | **Starting point (current in template)** |
-| `ami-0771b6766e1e61632` | 2.0.20260109.1 | 2026-01-09 | |
-| `ami-026992d753d5622bc` | 2.0.20260120.1 | 2026-01-16 | |
-| `ami-0e349888043265b96` | 2.0.20260202.2 | 2026-02-04 | |
-| `ami-0199fa5fada510433` | 2.0.20260216.0 | 2026-02-13 | **Upgrade target** |
+| `ami-0dc67873410203528` | 2.0.20240328 | 2024-03-28 | **Starting point (current in template)** |
+| `ami-021fe45d6043e82c8` | 2.0.20240409 | 2024-04-10 | |
+| `ami-057f57c2fcd14e5f4` | 2.0.20240424 | 2024-04-25 | |
+| `ami-0cf60a53ad9cf9e40` | 2.0.20240515 | 2024-05-16 | |
+| `ami-06cc69030d77088a1` | 2.0.20260226 | 2026-02-26 | |
+| `ami-0605df8f00118a0df` | 2.0.20260307 | 2026-03-07 | |
+| `ami-07bb74bad4a7a0b7a` | 2.0.20260323 | 2026-03-23 | **Upgrade target** |
 
-To refresh this list at any time (AWS periodically adds and removes AMIs):
+To refresh this list at any time:
 
 ```bash
+# Oldest available (starting points)
 aws ec2 describe-images \
   --owners amazon \
-  --filters "Name=name,Values=amzn2-ami-hvm-2.0.*-x86_64-gp2" \
+  --filters "Name=name,Values=amzn2-ami-ecs-hvm-*-x86_64-ebs" \
   --query "sort_by(Images, &CreationDate)[*].{Name:Name,ImageId:ImageId,CreationDate:CreationDate}" \
   --region us-east-1 \
   --output table

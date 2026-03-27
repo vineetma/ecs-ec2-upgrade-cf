@@ -152,12 +152,14 @@ Resources:
         - !Ref MyEFSSecurityGroup
 
   # --- LaunchTemplate: blueprint for ASG instances. Update ImageId here to trigger rolling AMI upgrade. ---
+  # Using ECS-optimized AMI: ECS agent is pre-installed, no manual install needed in UserData.
+  # Upgrade path: ami-0dc67873410203528 (2024-03-28) → ami-07bb74bad4a7a0b7a (2026-03-23)
   MyLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateData:
         InstanceType: 't3.small'
-        ImageId: 'ami-0fcb14c72c80bdef2'  # amzn2-ami-hvm-2.0.20260105.1 — oldest available AL2, intentional starting point for AMI upgrade exercise
+        ImageId: 'ami-0dc67873410203528'  # amzn2-ami-ecs-hvm-2.0.20240328 — oldest available ECS-optimized AL2, starting point for upgrade exercise
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
         SecurityGroupIds:
@@ -168,15 +170,11 @@ Resources:
             # Log all output for debugging (readable via EC2 console: Actions > Monitor > Get system log)
             exec > >(tee /var/log/userdata.log) 2>&1
 
-            # Install and start ECS agent
-            yum install -y amazon-ecs-init
-            mkdir -p /etc/ecs
+            # ECS agent is pre-installed on ECS-optimized AMI — just set cluster and restart
             echo "ECS_CLUSTER=MyECSCluster" > /etc/ecs/ecs.config
-            systemctl enable ecs
-            systemctl start ecs
+            systemctl restart ecs
 
-            # Mount EFS — nofail ensures EFS issues don't block ECS or fail UserData
-            # DNS resolution for EFS mount targets can be slow on first boot
+            # Mount EFS — nofail ensures EFS issues don't block ECS registration
             yum install -y amazon-efs-utils
             mkdir -p /ecs/logs/nginx
             echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab
