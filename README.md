@@ -273,6 +273,28 @@ EC2 security group: port 80 from ALB only — no direct internet access to insta
 
 ---
 
+### Build & Push the App Image
+
+The ECS task runs a Node.js app from `src/`. Build it locally and push to Docker Hub before deploying the stack.
+
+```bash
+# Build the image (run from repo root where Dockerfile lives)
+docker build -t ecs-hello-world .
+
+# Tag with your Docker Hub username
+docker tag ecs-hello-world YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest
+
+# Login and push
+docker login
+docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest
+```
+
+To push a versioned tag alongside `latest`:
+```bash
+docker tag ecs-hello-world YOUR_DOCKERHUB_USERNAME/ecs-hello-world:v1.0.0
+docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:v1.0.0
+```
+
 ### Deploy
 
 ```bash
@@ -280,10 +302,11 @@ aws cloudformation deploy \
   --template-file cf/ecs-ec2-multi-node-cf.yaml \
   --stack-name my-ecs-stack \
   --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides AppImage=YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest \
   --region us-east-1
 ```
 
-No parameters required — VPC, subnets, and all networking are created by the stack.
+Replace `YOUR_DOCKERHUB_USERNAME` with your actual Docker Hub username. The `AppImage` parameter is how you swap to a new image version without editing the template — just push a new tag and redeploy with the updated `--parameter-overrides`.
 
 ### Verify
 
