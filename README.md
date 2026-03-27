@@ -316,6 +316,17 @@ aws cloudformation wait stack-delete-complete \
   --region us-east-1
 ```
 
+**Note:** Terminated EC2 instances do not require manual cleanup — AWS automatically purges them from the API within ~1 hour of termination. To confirm old instances are gone:
+
+```bash
+# Should return empty — no terminated instances remain visible after ~1 hour
+aws ec2 describe-instances \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+            "Name=instance-state-name,Values=terminated" \
+  --query "Reservations[*].Instances[*].{Id:InstanceId,AMI:ImageId,State:State.Name}" \
+  --output table --region us-east-1
+```
+
 **Note:** ECS task definition revisions are not deleted by CloudFormation — deregister manually:
 
 ```bash
@@ -476,9 +487,10 @@ You should see:
 #### Step 5 — Verify
 
 ```bash
-# Confirm both instances are on the new AMI
+# Confirm both instances are on the new AMI (excludes terminated instances)
 aws ec2 describe-instances \
   --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+            "Name=instance-state-name,Values=running" \
   --query "Reservations[*].Instances[*].{Id:InstanceId,AMI:ImageId,State:State.Name}" \
   --output table --region us-east-1
 
