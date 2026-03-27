@@ -327,6 +327,68 @@ aws ecs deregister-task-definition --task-definition hello-world-task:N --region
 
 ---
 
+### Validate — Health Check After Deploy
+
+Run these after the stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE` to confirm everything is healthy.
+
+```bash
+# 1. Confirm 2 EC2 instances registered with the cluster
+aws ecs list-container-instances --cluster MyECSCluster --region us-east-1
+
+# 2. Confirm service is running 2/2 tasks
+aws ecs describe-services \
+  --cluster MyECSCluster \
+  --services MyService \
+  --query "services[0].{Running:runningCount,Desired:desiredCount,Pending:pendingCount,Status:status}" \
+  --region us-east-1
+
+# 3. List running tasks
+aws ecs list-tasks --cluster MyECSCluster --region us-east-1
+
+# 4. Check task health (substitute task ARN from above)
+aws ecs describe-tasks \
+  --cluster MyECSCluster \
+  --tasks <task-arn> \
+  --query "tasks[0].{Status:lastStatus,Health:healthStatus,StoppedReason:stoppedReason}" \
+  --region us-east-1
+```
+
+**Expected state:** 2 container instances registered, service shows `runningCount: 2`, tasks in `RUNNING` status.
+
+#### Things to explore before the AMI upgrade exercise
+
+```bash
+# Shell into an instance (no key pair needed)
+aws ssm start-session --target <instance-id> --region us-east-1
+
+# Once inside — confirm nginx container is running
+docker ps
+
+# Hit nginx directly
+curl http://localhost
+
+# Confirm EFS is mounted
+df -h | grep efs
+mount | grep efs
+
+# Check nginx logs are landing on EFS
+ls /ecs/logs/nginx/
+cat /ecs/logs/nginx/access.log
+
+# Write a test file from instance 1, then SSM into instance 2 and read it
+# (proves both instances share the same EFS filesystem)
+echo "hello from instance 1" > /ecs/logs/nginx/test.txt
+```
+
+On instance 2:
+```bash
+cat /ecs/logs/nginx/test.txt   # should print "hello from instance 1"
+```
+
+This confirms EFS is working as a shared filesystem across both AZs.
+
+---
+
 ### ECS-Optimized AMIs for Upgrade Exercise
 
 The stack uses **ECS-optimized AMIs** (not plain AL2). These have the ECS agent pre-installed — no manual installation needed in UserData. This is more reliable than installing the agent at boot time.
@@ -355,7 +417,79 @@ aws ec2 describe-images \
   --output table
 ```
 
-To trigger an AMI upgrade, update `ImageId` in `MyLaunchTemplate` in [cf/ecs-ec2-multi-node-cf.yaml](cf/ecs-ec2-multi-node-cf.yaml) and redeploy — the ASG rolling update policy handles the rest.
+---
+
+### AMI Upgrade Exercise — Step by Step
+
+This is the planned exercise to practice zero-downtime AMI rolling upgrades using the ASG update policy.
+
+**Goal:** Replace both EC2 instances with a newer ECS-optimized AMI without dropping any running tasks.
+
+#### How it works
+
+The ASG `UpdatePolicy` replaces one instance at a time:
+1. CloudFormation creates a new instance with the new AMI (cluster temporarily has 3 instances)
+2. ECS reschedules the task from the old instance onto the new one
+3. Old instance is drained and terminated
+4. Repeat for the second instance
+
+#### Step 1 — Pick a target AMI
+
+Use the table above. The current starting point is `ami-0dc67873410203528` (2024-03-28). The intended upgrade target is `ami-07bb74bad4a7a0b7a` (2026-03-23). You can step through intermediate AMIs to practice multiple upgrades.
+
+#### Step 2 — Update the template
+
+In [cf/ecs-ec2-multi-node-cf.yaml](cf/ecs-ec2-multi-node-cf.yaml), change only this line in `MyLaunchTemplate`:
+
+```yaml
+ImageId: 'ami-07bb74bad4a7a0b7a'  # amzn2-ami-ecs-hvm-2.0.20260323 — upgrade target
+```
+
+#### Step 3 — Deploy
+
+```bash
+aws cloudformation deploy \
+  --template-file cf/ecs-ec2-multi-node-cf.yaml \
+  --stack-name my-ecs-stack \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
+
+#### Step 4 — Monitor the rolling update
+
+Open a second terminal and watch events live while the update runs:
+
+```bash
+watch -n 10 'aws cloudformation describe-stack-events \
+  --stack-name my-ecs-stack --region us-east-1 \
+  --query "StackEvents[:8].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus}" \
+  --output table'
+```
+
+You should see:
+- `MyASG UPDATE_IN_PROGRESS` — rolling update started
+- A new instance launching (check EC2 console — temporarily 3 instances)
+- Old instance terminating
+- Repeat for second instance
+- `MyASG UPDATE_COMPLETE`
+
+#### Step 5 — Verify
+
+```bash
+# Confirm both instances are on the new AMI
+aws ec2 describe-instances \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+  --query "Reservations[*].Instances[*].{Id:InstanceId,AMI:ImageId,State:State.Name}" \
+  --output table --region us-east-1
+
+# Confirm ECS service stayed at 2 running tasks throughout
+aws ecs describe-services \
+  --cluster MyECSCluster --services MyService \
+  --query "services[0].{Running:runningCount,Desired:desiredCount}" \
+  --region us-east-1
+```
+
+Both instances should show the new AMI ID. `runningCount` should be 2 throughout the update (never dropped to 0 — that's the point of `MinInstancesInService: 1`).
 
 ---
 
