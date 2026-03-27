@@ -235,6 +235,10 @@ Resources:
           Arn: !GetAtt ECSInstanceProfile.Arn
         SecurityGroupIds:
           - !Ref MyEC2SecurityGroup
+        MetadataOptions:
+          HttpTokens: required          # IMDSv2 only — more secure than IMDSv1
+          HttpPutResponseHopLimit: 2    # Default is 1; containers on bridge networking add an extra hop,
+                                        # so without this, IMDSv2 requests from inside containers are dropped
         UserData:
           Fn::Base64: |
             #!/bin/bash
