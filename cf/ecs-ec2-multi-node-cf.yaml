@@ -217,6 +217,8 @@ Resources:
   # --- LaunchTemplate: blueprint for ASG instances. Update ImageId here to trigger rolling AMI upgrade. ---
   # Using ECS-optimized AMI: ECS agent is pre-installed, no manual install needed in UserData.
   # Upgrade path: ami-0dc67873410203528 (2024-03-28) → ami-07bb74bad4a7a0b7a (2026-03-23)
+  # UserData is minimal — only the ECS cluster config that must be written before the ECS agent starts.
+  # Software installation (amazon-efs-utils) and EFS mounting are handled by SSM State Manager (MyEFSSetupAssociation).
   MyLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -228,22 +230,37 @@ Resources:
         SecurityGroupIds:
           - !Ref MyEC2SecurityGroup
         UserData:
-          Fn::Base64: !Sub |
+          Fn::Base64: |
             #!/bin/bash
-            # Log all output for debugging (readable via EC2 console: Actions > Monitor > Get system log)
-            exec > >(tee /var/log/userdata.log) 2>&1
-
-            # ECS agent is pre-installed on ECS-optimized AMI — write cluster config.
+            # Minimal UserData: only ECS cluster registration.
             # Do NOT call systemctl start ecs here: ecs.service has After=cloud-final.service,
             # so starting it from UserData (which runs inside cloud-final) causes a deadlock.
             # systemd will auto-start ecs after cloud-final completes.
             echo "ECS_CLUSTER=MyECSCluster" > /etc/ecs/ecs.config
 
-            # Mount EFS — nofail ensures EFS issues don't block ECS registration
-            yum install -y amazon-efs-utils
-            mkdir -p /ecs/logs/nginx
-            echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab
-            mount -a || echo "EFS mount failed — will retry on reconnect (nofail set)"
+  # --- SSM State Manager Association: installs amazon-efs-utils and mounts EFS on every instance ---
+  # Runs automatically on each new instance once SSM agent is ready (within ~60s of boot).
+  # Targets all EC2 instances in this stack via the aws:cloudformation:stack-name tag.
+  # Note: EFS mount happens after ECS agent starts — ECS tasks that need /ecs/logs may fail their
+  # first placement and be retried by the service scheduler. HealthCheckGracePeriodSeconds: 60 on
+  # the ECS service provides enough buffer for SSM to complete before ALB health checks count.
+  MyEFSSetupAssociation:
+    Type: AWS::SSM::Association
+    DependsOn: MyASG
+    Properties:
+      AssociationName: !Sub '${AWS::StackName}-efs-setup'
+      Name: AWS-RunShellScript
+      Targets:
+        - Key: 'tag:aws:cloudformation:stack-name'
+          Values:
+            - !Sub '${AWS::StackName}'
+      Parameters:
+        commands:
+          - 'yum install -y amazon-efs-utils'
+          - 'mkdir -p /ecs/logs/nginx'
+          - !Sub 'grep -q "${MyEFSFileSystem}" /etc/fstab || echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab'
+          - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
+      WaitForSuccessTimeoutSeconds: 300
 
   # --- ASG: rolling update replaces one instance at a time, keeps min 1 running ---
   MyASG:
