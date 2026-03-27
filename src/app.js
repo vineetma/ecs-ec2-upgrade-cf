@@ -80,6 +80,7 @@ function readBody(req) {
 // HTTP server
 // ---------------------------------------------------------------------------
 const server = http.createServer(async (req, res) => {
+  res.setHeader('Connection', 'close');
   const url = req.url.split('?')[0];
 
   // GET / — serve frontend
@@ -98,7 +99,7 @@ const server = http.createServer(async (req, res) => {
   // GET /api/info — node metadata
   if (req.method === 'GET' && url === '/api/info') {
     const info = await getInfo();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(info));
     return;
   }

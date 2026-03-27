@@ -229,6 +229,28 @@ The `PlacementStrategies: spread by instanceId` in the ECS service is about **ta
 
 **Cost:** ALB adds ~$0.008/hr base + LCU charges (negligible at this traffic volume). See cost table below.
 
+#### `Connection: close` and how round-robin works in a browser
+
+The ALB load-balances **per TCP connection**, not per HTTP request. By default, browsers use HTTP keep-alive — they reuse the same TCP connection for multiple requests. All requests on a single connection go to the same backend, so a browser refresh keeps hitting the same EC2 instance even though the ALB is healthy and has two targets.
+
+There are two separate TCP connections in this stack:
+
+```
+Browser ──── TCP connection ────► ALB ──── TCP connection ────► Node.js (EC2)
+           (browser controls)              (Node.js controls)
+```
+
+Setting `Connection: close` in the Node.js response affects only the **ALB → Node.js** leg:
+
+- Node.js sends `Connection: close` → ALB tears down the backend connection after each response
+- On the next request (even over the same browser → ALB keep-alive connection), the ALB must open a **new** backend connection — and that is where load balancing happens, picking either instance
+
+The browser's network tab shows `connection: keep-alive` in response headers — that describes the **browser → ALB** leg, which the ALB controls independently and keeps alive regardless. This is expected and correct.
+
+Result: every browser refresh opens a fresh ALB → backend connection, and the ALB alternates between the two instances. The instance ID in the UI changes on each page load.
+
+> **Note:** `Connection: close` is intentionally inefficient (disables keep-alive for every request) and is only appropriate here for demo purposes to make round-robin visible in a browser. In production you would use curl or ALB access logs to verify traffic distribution instead.
+
 ---
 
 #### EC2 access — SSM over SSH

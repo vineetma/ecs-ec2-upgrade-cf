@@ -343,10 +343,10 @@ Resources:
       LaunchType: EC2
       HealthCheckGracePeriodSeconds: 60
       DeploymentConfiguration:
-        MinimumHealthyPercent: 0    # Required with fixed HostPort: stop old task first to free the port,
-                                    # then start new task. Without this, ECS tries to run both simultaneously
-                                    # and deadlocks because port 80 is already occupied on both instances.
-        MaximumPercent: 100         # Never exceed desired count — consistent with stop-before-start approach
+        MinimumHealthyPercent: 50   # Stop 1 task at a time (out of 2): frees port on that instance,
+                                    # then starts new task there before moving to the second instance.
+                                    # MaximumPercent: 100 prevents old+new running together, so no port conflict.
+        MaximumPercent: 100         # Never exceed desired count — prevents two tasks competing for HostPort 80
       LoadBalancers:
         - ContainerName: 'hello-world-container'
           ContainerPort: 3000
