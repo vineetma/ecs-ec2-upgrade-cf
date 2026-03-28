@@ -272,26 +272,34 @@ aws ssm start-session --target i-xxxxxxxxxxxxxxxxx
 
 ### Architecture
 
+```mermaid
+graph TD
+    Internet([Internet]) -->|HTTP :80| ALB["ALB — MyALB\ninternet-facing, spans both AZs"]
+
+    ALB -->|round-robin| EC2_1
+    ALB -->|round-robin| EC2_2
+
+    subgraph VPC["VPC (10.0.0.0/16)"]
+        subgraph AZ0["Subnet 1 · 10.0.1.0/24 · AZ-0"]
+            EC2_1["EC2 Instance 1\nt3.small · ECS Agent"]
+            App1["app container (task 1)\nNode.js :3000"]
+            EC2_1 --> App1
+        end
+        subgraph AZ1["Subnet 2 · 10.0.2.0/24 · AZ-1"]
+            EC2_2["EC2 Instance 2\nt3.small · ECS Agent"]
+            App2["app container (task 2)\nNode.js :3000"]
+            EC2_2 --> App2
+        end
+        EFS[("EFS\nshared /data")]
+        App1 -->|"/data (records.json)"| EFS
+        App2 -->|"/data (records.json)"| EFS
+    end
+
+    ASG["Auto Scaling Group\nPlacementStrategy: spread by instanceId"] -.->|manages| EC2_1
+    ASG -.->|manages| EC2_2
 ```
-Internet
-    │  HTTP :80
-    ▼
-ALB (MyALB) — internet-facing, spans both AZs
-    │
-    │  round-robin
-    ├─────────────────────────────────┐
-    ▼                                 ▼
-VPC (10.0.0.0/16)
-├── Subnet 1 (10.0.1.0/24, AZ-0)    Subnet 2 (10.0.2.0/24, AZ-1)
-│   EC2 Instance 1 (t3.small)        EC2 Instance 2 (t3.small)
-│   ECS Agent                         ECS Agent
-│   nginx container (task 1)          nginx container (task 2)
-│         ↓ /var/log/nginx                  ↓ /var/log/nginx
-│         EFS /ecs/logs/nginx               EFS /ecs/logs/nginx
-│
-Both instances managed by ASG. MyECSCluster (PlacementStrategy: spread by instanceId).
-EC2 security group: port 80 from ALB only — no direct internet access to instances.
-```
+
+> EC2 security group: port 80 from ALB only — no direct internet access to instances.
 
 ---
 
