@@ -5,7 +5,13 @@
       "Bash(git commit:*)",
       "Bash(git add:*)",
       "Skill(update-config)",
-      "Skill(update-config:*)"
+      "Skill(update-config:*)",
+      "Bash(aws ec2:*)",
+      "Bash(chmod +x /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/suspend.sh /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/resume.sh)",
+      "Bash(npm install:*)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\vinee\\Documents\\workspace\\aws-ecs-setup-cf\\cdk"
     ]
   }
 }

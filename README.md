@@ -322,26 +322,25 @@ docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:v1.0.0
 ```bash
 aws cloudformation deploy \
   --template-file cf/ecs-ec2-multi-node-cf.yaml \
-  --stack-name my-ecs-stack \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AppImage=YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest \
-  --no-rollback \
-  --region us-east-1
+  --stack-name hello-world-test \
+  --region us-east-1 \
+  --parameter-overrides AppImage=vineetma/ecs-hello-world:1.4 \
+  --capabilities CAPABILITY_NAMED_IAM
 ```
 
-Replace `YOUR_DOCKERHUB_USERNAME` with your actual Docker Hub username. The `AppImage` parameter is how you swap to a new image version without editing the template — just push a new tag and redeploy with the updated `--parameter-overrides`.
+The `AppImage` parameter is how you swap to a new image version without editing the template — push a new tag and redeploy with the updated `--parameter-overrides`.
 
-`--no-rollback` keeps the stack in `UPDATE_FAILED`/`CREATE_FAILED` state on error instead of rolling back — useful when debugging task startup failures so you can fix and redeploy without recreating the entire stack. If the stack gets stuck and subsequent deploys are blocked, resume the rollback first:
+If a deploy fails and subsequent deploys are blocked, resume the rollback first:
 
 ```bash
-aws cloudformation continue-update-rollback --stack-name my-ecs-stack --region us-east-1
+aws cloudformation continue-update-rollback --stack-name hello-world-test --region us-east-1
 ```
 
 ### Verify
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --query "Stacks[0].Outputs" \
   --region us-east-1
 ```
@@ -355,21 +354,15 @@ Stack events show what happened during create, update, or rollback. Most useful 
 ```bash
 # All events (most recent first)
 aws cloudformation describe-stack-events \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --region us-east-1
 
 # Failures only — filters to just the error lines
 aws cloudformation describe-stack-events \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --region us-east-1 \
   --query "StackEvents[?contains(ResourceStatus,'FAILED')].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}" \
   --output table
-
-# Watch events live during deploy (poll every 10s) — run in a second terminal
-watch -n 10 'aws cloudformation describe-stack-events \
-  --stack-name my-ecs-stack --region us-east-1 \
-  --query "StackEvents[:5].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus}" \
-  --output table'
 ```
 
 ### Troubleshoot — verify ECS instances registered
@@ -394,9 +387,9 @@ aws ssm start-session --target <instance-id> --region us-east-1
 ```bash
 # Step 1: Scale ECS service to 0 before deleting — bypasses the 300s ALB deregistration drain
 # and prevents the ECS service DELETE_FAILED timeout that occurs when tasks are still running.
-CLUSTER=$(aws cloudformation describe-stack-resources --stack-name my-ecs-stack \
+CLUSTER=$(aws cloudformation describe-stack-resources --stack-name hello-world-test \
   --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId" --output text)
-SERVICE=$(aws cloudformation describe-stack-resources --stack-name my-ecs-stack \
+SERVICE=$(aws cloudformation describe-stack-resources --stack-name hello-world-test \
   --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" --output text)
 
 aws ecs update-service --cluster $CLUSTER --service $SERVICE --desired-count 0
@@ -406,12 +399,12 @@ sleep 30
 
 # Step 2: Delete the stack (removes VPC, EFS, ASG, ECS cluster — everything)
 aws cloudformation delete-stack \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --region us-east-1
 
 # Wait for full deletion
 aws cloudformation wait stack-delete-complete \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --region us-east-1
 ```
 
@@ -420,7 +413,7 @@ aws cloudformation wait stack-delete-complete \
 ```bash
 # Should return empty — no terminated instances remain visible after ~1 hour
 aws ec2 describe-instances \
-  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=hello-world-test" \
             "Name=instance-state-name,Values=terminated" \
   --query "Reservations[*].Instances[*].{Id:InstanceId,AMI:ImageId,State:State.Name}" \
   --output table --region us-east-1
@@ -472,7 +465,7 @@ aws ecs describe-tasks \
 ```bash
 # 5. Get the ALB DNS name from stack outputs and curl it
 ALB_URL=$(aws cloudformation describe-stacks \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --query "Stacks[0].Outputs[?OutputKey=='ALBDNSName'].OutputValue" \
   --output text --region us-east-1)
 
@@ -492,7 +485,7 @@ The simplest approach to confirm round-robin is to compare the nginx container I
 ```bash
 # Step 1: Get the ALB DNS name
 ALB_URL=$(aws cloudformation describe-stacks \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --query "Stacks[0].Outputs[?OutputKey=='ALBDNSName'].OutputValue" \
   --output text --region us-east-1)
 
@@ -624,7 +617,7 @@ ImageId: 'ami-07bb74bad4a7a0b7a'  # amzn2-ami-ecs-hvm-2.0.20260323 — upgrade t
 ```bash
 aws cloudformation deploy \
   --template-file cf/ecs-ec2-multi-node-cf.yaml \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
@@ -635,7 +628,7 @@ Open a second terminal and watch events live while the update runs:
 
 ```bash
 watch -n 10 'aws cloudformation describe-stack-events \
-  --stack-name my-ecs-stack --region us-east-1 \
+  --stack-name hello-world-test --region us-east-1 \
   --query "StackEvents[:8].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus}" \
   --output table'
 ```
@@ -652,7 +645,7 @@ You should see:
 ```bash
 # Confirm both instances are on the new AMI (excludes terminated instances)
 aws ec2 describe-instances \
-  --filters "Name=tag:aws:cloudformation:stack-name,Values=my-ecs-stack" \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=hello-world-test" \
             "Name=instance-state-name,Values=running" \
   --query "Reservations[*].Instances[*].{Id:InstanceId,AMI:ImageId,State:State.Name}" \
   --output table --region us-east-1
@@ -690,7 +683,7 @@ Then deploy:
 ```bash
 aws cloudformation deploy \
   --template-file cf/ecs-ec2-multi-node-cf.yaml \
-  --stack-name my-ecs-stack \
+  --stack-name hello-world-test \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```

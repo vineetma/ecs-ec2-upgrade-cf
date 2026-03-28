@@ -10,6 +10,27 @@ Parameters:
 #    Default: 'vineetma/ecs-hello-world:latest'
     Description: 'Docker Hub image for the Node.js app. Build and push with: docker build -t ecs-hello-world . && docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:latest'
 
+  Suspended:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'Set to true to scale down all EC2 instances and remove the ALB (zero running cost).'
+
+  EFSEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'Set to true to back app data with EFS (persists across instance replacements). Default false — data stored on EC2 local disk, backed up to S3 on suspend.'
+
+  AmiId:
+    Type: String
+    Default: 'ami-0dc67873410203528'  # amzn2-ami-ecs-hvm-2.0.20240328 — oldest available, starting point for upgrade exercise
+    Description: 'ECS-optimized AL2 AMI ID. Change to trigger a rolling AMI upgrade via the ASG update policy. See README for upgrade path.'
+
+Conditions:
+  IsActive: !Equals [!Ref Suspended, 'false']
+  EFSEnabled: !Equals [!Ref EFSEnabled, 'true']
+
 Resources:
 
   # --- VPC ---
@@ -96,6 +117,16 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore  # SSM shell access — no SSH/key pair needed
+      Policies:
+        - PolicyName: S3BackupAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub 'arn:aws:s3:::${MyBackupBucket}/*'
 
   ECSInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -153,6 +184,7 @@ Resources:
 
   # --- EFS: Shared log storage (persists across instance replacements) ---
   MyEFSFileSystem:
+    Condition: EFSEnabled
     Type: AWS::EFS::FileSystem
     Properties:
       Encrypted: true
@@ -160,6 +192,7 @@ Resources:
 
   # One mount target per subnet/AZ
   MyEFSMountTarget1:
+    Condition: EFSEnabled
     Type: AWS::EFS::MountTarget
     Properties:
       FileSystemId: !Ref MyEFSFileSystem
@@ -168,6 +201,7 @@ Resources:
         - !Ref MyEFSSecurityGroup
 
   MyEFSMountTarget2:
+    Condition: EFSEnabled
     Type: AWS::EFS::MountTarget
     Properties:
       FileSystemId: !Ref MyEFSFileSystem
@@ -179,6 +213,7 @@ Resources:
   # Cost note: ALB costs ~$0.008/hr base + LCU charges (~$0.008/LCU-hr). For this learning
   # setup the LCU charges will be negligible. Total ALB cost ~$0.008–0.010/hr (~$6–7/month).
   MyALB:
+    Condition: IsActive
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Type: application
@@ -194,6 +229,7 @@ Resources:
   # when tasks start, and deregisters them when tasks stop.
   # Health check: ALB polls GET / on port 80 every 30s; 2 consecutive 200s = healthy.
   MyTargetGroup:
+    Condition: IsActive
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       VpcId: !Ref MyVPC
@@ -211,6 +247,7 @@ Resources:
 
   # HTTP listener: all traffic on port 80 → forwarded to the target group
   MyListener:
+    Condition: IsActive
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref MyALB
@@ -230,7 +267,7 @@ Resources:
     Properties:
       LaunchTemplateData:
         InstanceType: 't3.small'
-        ImageId: 'ami-0dc67873410203528'  # amzn2-ami-ecs-hvm-2.0.20240328 — oldest available ECS-optimized AL2, starting point for upgrade exercise
+        ImageId: !Ref AmiId
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
         SecurityGroupIds:
@@ -255,6 +292,7 @@ Resources:
   # first placement and be retried by the service scheduler. HealthCheckGracePeriodSeconds: 60 on
   # the ECS service provides enough buffer for SSM to complete before ALB health checks count.
   MyEFSSetupAssociation:
+    Condition: EFSEnabled
     Type: AWS::SSM::Association
     DependsOn: MyASG
     Properties:
@@ -267,21 +305,28 @@ Resources:
       Parameters:
         commands:
           - 'yum install -y amazon-efs-utils'
-          - 'mkdir -p /ecs/logs/nginx /ecs/logs/data'
+          - 'mkdir -p /ecs/logs'
           - !Sub 'grep -q "${MyEFSFileSystem}" /etc/fstab || echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab'
           - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
+          - 'mkdir -p /ecs/logs/nginx /ecs/logs/data'
       WaitForSuccessTimeoutSeconds: 300
+
+  # --- S3: Backup bucket for records.json — persists across suspend/resume cycles ---
+  # DeletionPolicy: Retain keeps the bucket when the stack is deleted.
+  MyBackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
 
   # --- ASG: rolling update replaces one instance at a time, keeps min 1 running ---
   MyASG:
     Type: AWS::AutoScaling::AutoScalingGroup
-    DependsOn:
-      - MyEFSMountTarget1
-      - MyEFSMountTarget2
+    # DependsOn EFS mount targets intentionally omitted: those resources are conditional on EFSEnabled,
+    # and DependsOn cannot reference a conditional resource that may not exist.
     Properties:
-      MinSize: '2'
+      MinSize: !If [IsActive, '2', '0']
       MaxSize: '3'  # Temporarily allows 3 during rolling upgrade (2 running + 1 new)
-      DesiredCapacity: '2'
+      DesiredCapacity: !If [IsActive, '2', '0']
       LaunchTemplate:
         LaunchTemplateId: !Ref MyLaunchTemplate
         Version: !GetAtt MyLaunchTemplate.LatestVersionNumber
@@ -305,7 +350,7 @@ Resources:
       Volumes:
         - Name: efs-data
           Host:
-            SourcePath: '/ecs/logs/data'  # EFS-backed — shared across all containers on all instances
+            SourcePath: '/ecs/logs/data'  # EFS-backed when EFSEnabled=true (survives EC2 replacement); local disk when false
       ContainerDefinitions:
         - Name: 'hello-world-container'
           Image: !Ref AppImage
@@ -332,10 +377,13 @@ Resources:
   # HealthCheckGracePeriodSeconds: gives nginx time to start before ALB health checks begin.
   # Without this, ECS may see the first health check fail (nginx not yet up) and kill the task.
   MyService:
+    Condition: IsActive
     Type: AWS::ECS::Service
     DependsOn:
       - MyASG
-      - MyListener  # ALB listener must exist before ECS can attach to the target group
+      # MyListener intentionally omitted from DependsOn: both MyService and MyListener are conditional
+      # on IsActive. CloudFormation does not support DependsOn referencing a conditional resource
+      # when the condition is false — it would error trying to resolve a resource that doesn't exist.
     Properties:
       Cluster: !Ref MyECSCluster
       DesiredCount: 2
@@ -357,12 +405,14 @@ Resources:
 
 Outputs:
   ALBDNSName:
+    Condition: IsActive
     Description: 'ALB DNS name — open this in a browser or use with curl to validate round-robin'
     Value: !Sub 'http://${MyALB.DNSName}'
   ClusterName:
     Description: 'Name of the ECS Cluster'
     Value: !Ref MyECSCluster
   EFSFileSystemId:
+    Condition: EFSEnabled
     Description: 'EFS File System ID (logs persist here across instance replacements)'
     Value: !Ref MyEFSFileSystem
   ASGName:
@@ -372,5 +422,9 @@ Outputs:
     Description: 'ARN of the Task Definition'
     Value: !Ref MyTaskDefinition
   ServiceName:
+    Condition: IsActive
     Description: 'Name of the ECS Service'
     Value: !Ref MyService
+  BackupBucketName:
+    Description: 'S3 bucket for records.json backup (persists across suspend/resume)'
+    Value: !Ref MyBackupBucket
