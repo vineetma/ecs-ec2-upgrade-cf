@@ -1,0 +1,23 @@
+{
+  "name": "ecs-ec2-cdk",
+  "version": "0.1.0",
+  "description": "CDK v2 TypeScript equivalent of cf/ecs-ec2-multi-node-cf.yaml",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "synth": "npx cdk synth",
+    "deploy": "npx cdk deploy",
+    "diff": "npx cdk diff",
+    "destroy": "npx cdk destroy"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.0.0",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

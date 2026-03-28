@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Read(//c/Users/vinee/AppData/Local/npm-cache/_logs/**)",
+      "Read(//c/NodeJs/node-v22.13.0-win-x64/node_modules/npm/node_modules/tar//**)",
+      "Bash(node /c/NodeJs/node-v22.13.0-win-x64/node_modules/npm/bin/npm-cli.js install)",
+      "Read(//c/Users/vinee/AppData/Roaming/**)",
+      "Bash(chmod +x /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/update-ami.sh)",
+      "Bash(node -e \"const m = require\\(''/c/NodeJs/node-v22.13.0-win-x64/node_modules/npm/node_modules/tar/node_modules/minipass/index.js''\\); console.log\\(typeof m, m && typeof m.constructor\\)\")",
+      "Bash(chmod +x /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/deploy.sh /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/delete.sh)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}
