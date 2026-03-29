@@ -10,6 +10,9 @@
       "Bash(node -e \"const m = require\\(''/c/NodeJs/node-v22.13.0-win-x64/node_modules/npm/node_modules/tar/node_modules/minipass/index.js''\\); console.log\\(typeof m, m && typeof m.constructor\\)\")",
       "Bash(chmod +x /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/deploy.sh /c/Users/vinee/Documents/workspace/aws-ecs-setup-cf/scripts/delete.sh)",
       "Bash(git checkout:*)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\vinee\\Documents\\workspace\\aws-ecs-setup-cf\\.claude"
     ]
   }
 }
