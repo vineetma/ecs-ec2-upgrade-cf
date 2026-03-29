@@ -279,18 +279,19 @@ Resources:
         UserData:
           Fn::Base64: |
             #!/bin/bash
-            # Minimal UserData: only ECS cluster registration.
-            # Do NOT call systemctl start ecs here: ecs.service has After=cloud-final.service,
-            # so starting it from UserData (which runs inside cloud-final) causes a deadlock.
-            # systemd will auto-start ecs after cloud-final completes.
+            # Write ECS cluster config before the agent starts.
             echo "ECS_CLUSTER=MyECSCluster" > /etc/ecs/ecs.config
+            # Mask ECS so it cannot auto-start after cloud-final.
+            # SSM will mount EFS first, then unmask and start ECS.
+            # This ensures tasks are never placed on an instance before EFS is ready.
+            # (Do NOT use systemctl start ecs here — runs inside cloud-final and would deadlock.)
+            systemctl mask ecs
 
   # --- SSM State Manager Association: installs amazon-efs-utils and mounts EFS on every instance ---
   # Runs automatically on each new instance once SSM agent is ready (within ~60s of boot).
   # Targets all EC2 instances in this stack via the aws:cloudformation:stack-name tag.
-  # Note: EFS mount happens after ECS agent starts — ECS tasks that need /ecs/logs may fail their
-  # first placement and be retried by the service scheduler. HealthCheckGracePeriodSeconds: 60 on
-  # the ECS service provides enough buffer for SSM to complete before ALB health checks count.
+  # ECS agent is masked in UserData and only started by SSM after EFS is mounted.
+  # Tasks are therefore never placed on an instance before /ecs/logs is ready.
   MyEFSSetupAssociation:
     Condition: EFSEnabled
     Type: AWS::SSM::Association
@@ -309,6 +310,7 @@ Resources:
           - !Sub 'grep -qE "(^|[^a-z])${MyEFSFileSystem}([^a-z]|$)" /etc/fstab || echo "${MyEFSFileSystem}:/ /ecs/logs efs defaults,_netdev,nofail 0 0" >> /etc/fstab'
           - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
           - 'mkdir -p /ecs/logs/nginx /ecs/logs/data'
+          - 'systemctl unmask ecs && systemctl start ecs'
       WaitForSuccessTimeoutSeconds: 300
 
   # --- S3: Backup bucket for records.json — persists across suspend/resume cycles ---
