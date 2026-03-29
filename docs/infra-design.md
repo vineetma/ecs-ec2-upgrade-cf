@@ -485,7 +485,7 @@ aws ssm start-session --target <instance-1-id> --region us-east-1
 # docker exec <container-id> cat /etc/hostname
 ```
 
-**Why the responses look the same:** The stock `nginx:latest` image serves the same welcome page regardless of which host it runs on. To surface the host identity in the HTTP response itself (without a custom image), you would exec a command override at task definition level — but that would replace the nginx process and break the server. The correct production approach is a custom image that injects `$hostname` into the response, or using the ALB access logs (requires S3 bucket configuration). For this learning exercise, the nginx access logs via SSM are sufficient to confirm distribution.
+**Why the responses look the same:** The stock `nginx:latest` image serves the same welcome page regardless of which host it runs on. To surface the host identity in the HTTP response itself (without a custom image), you would exec a command override at task definition level — but that would replace the nginx process and break the server. The correct production approach is a custom image that injects `$hostname` into the response, or using the ALB access logs (requires S3 bucket configuration). For this use case, the nginx access logs via SSM are sufficient to confirm distribution.
 
 ---
 

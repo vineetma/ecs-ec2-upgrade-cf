@@ -1,4 +1,8 @@
-# Project Plan — AWS ECS Learning Path
+# Project Plan — AWS ECS Infrastructure
+
+**Objectives:**
+- Build reusable components for quick-start AWS infrastructure
+- Evaluate ECS specifically for AMI upgrade operations
 
 A structured roadmap for building, operating, and evolving this ECS infrastructure.
 Each phase builds on the last. Check off items as completed.
@@ -22,7 +26,7 @@ Core infrastructure and app running end-to-end.
 
 ## Phase 2 — Operations (Current)
 
-Learn day-2 operations: upgrades, observability, app iteration.
+Day-2 operations: upgrades, observability, app iteration.
 
 - [ ] **AMI rolling upgrade** — step through AMI versions using `scripts/update-ami.sh`; observe zero-downtime rolling replacement via ASG update policy
 - [ ] **Multi-container task** — split app into two containers (app + backend) sharing EFS volume; verify inter-container communication via localhost
@@ -143,11 +147,11 @@ Re-implement in Terraform once CDK phase is done. Direct comparison of all three
 
 | Topic | Decision | Reason |
 |---|---|---|
-| IaC tool | CloudFormation now, CDK next, Terraform later | Learning progression |
+| IaC tool | CloudFormation now, CDK next, Terraform later | Reusable component progression |
 | Launch type | EC2 (not Fargate) | Cost control + visibility into host |
 | Networking | VPC stack-owned, no NAT Gateway | Cost; public subnets only |
 | EC2 access | SSM Session Manager only | No key pairs, no port 22 |
-| Image registry | Docker Hub now → ECR later | Simplicity for learning phase |
+| Image registry | Docker Hub now → ECR later | Simplicity; migrate when reusability requires it |
 | AMI | Deliberately old (2024-03-28) | Rolling upgrade is a planned exercise |
 | Cost target | ~$0.054/hr when running; $0 when suspended | Suspend stack when not in use |
 

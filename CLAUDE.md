@@ -2,7 +2,7 @@
 
 ## Project
 
-AWS ECS infrastructure built with CloudFormation. Learning path: smoke test → full cluster → AMI upgrade → (future) Terraform.
+AWS ECS infrastructure built with CloudFormation. Objectives: build reusable components for quick-start AWS infrastructure; evaluate ECS specifically for AMI upgrade operations. Roadmap: smoke test → full cluster → AMI upgrade → (future) Terraform.
 
 ## Templates
 
