@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
 [ -f .env ] && source .env
 
 STACK=${1:-${STACK_NAME:-ecs-hello-world}}
@@ -57,7 +60,7 @@ fi
 echo ""
 echo "=== Suspending stack $STACK ==="
 aws cloudformation deploy \
-  --template-file cf/ecs-ec2-multi-node-cf.yaml \
+  --template-file "$REPO_ROOT/cf/ecs-ec2-multi-node-cf.yaml" \
   --stack-name "$STACK" \
   --region "$REGION" \
   --parameter-overrides AppImage="$APP_IMAGE" Suspended=true EFSEnabled=false \
