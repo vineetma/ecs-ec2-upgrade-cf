@@ -7,7 +7,7 @@ set -euo pipefail
 
 [ -f .env ] && source .env
 
-STACK=${STACK_NAME:-hello-world-test}
+STACK=${STACK_NAME:-ecs-hello-world}
 REGION=${AWS_REGION:-us-east-1}
 
 # Check stack exists

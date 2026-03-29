@@ -5,7 +5,7 @@
 
 [ -f .env ] && source .env
 
-STACK=${1:-${STACK_NAME:-hello-world-test}}
+STACK=${1:-${STACK_NAME:-ecs-hello-world}}
 REGION=${2:-${AWS_REGION:-us-east-1}}
 
 ALB_URL=$(aws cloudformation describe-stacks \

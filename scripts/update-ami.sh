@@ -18,7 +18,7 @@ set -euo pipefail
 [ -f .env ] && source .env
 
 AMI_ID=${1:-}
-STACK=${2:-${STACK_NAME:-hello-world-test}}
+STACK=${2:-${STACK_NAME:-ecs-hello-world}}
 REGION=${3:-${AWS_REGION:-us-east-1}}
 APP_IMAGE=${4:-${APP_IMAGE:-vineetma/ecs-hello-world:1.4}}
 
