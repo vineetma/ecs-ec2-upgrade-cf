@@ -82,72 +82,61 @@ done
 echo " ready."
 echo ""
 
-# --- SSM command: check mount, add fstab entry if missing, mount if not mounted ---
-COMMANDS=$(cat <<'CMDS'
-set -e
+# --- Build the remote script and base64-encode it ---
+# Base64 avoids all JSON/shell escaping issues and removes the python3 dependency.
+# The SSM command decodes and pipes to bash on the EC2 instance.
+REMOTE_SCRIPT="set -e
 MOUNT_POINT=/ecs/logs
-EFS_ID_PLACEHOLDER
+EFS_ID=${EFS_ID}
 
-# 1. Ensure amazon-efs-utils is installed
 if ! rpm -q amazon-efs-utils &>/dev/null; then
-  echo "[install] amazon-efs-utils not found — installing..."
+  echo '[install] amazon-efs-utils not found — installing...'
   yum install -y amazon-efs-utils
 else
-  echo "[install] amazon-efs-utils already installed"
+  echo '[install] amazon-efs-utils already installed'
 fi
 
-# 2. Ensure /etc/fstab has the EFS entry
-if grep -qE "(^|[[:space:]])${EFS_ID}([[:space:]]|$)" /etc/fstab; then
-  echo "[fstab] entry already present"
+if grep -qE '(^|[[:space:]])${EFS_ID}([[:space:]]|\$)' /etc/fstab; then
+  echo '[fstab] entry already present'
 else
-  echo "[fstab] adding entry for ${EFS_ID}"
-  echo "${EFS_ID}:/ ${MOUNT_POINT} efs defaults,_netdev,nofail 0 0" >> /etc/fstab
+  echo '[fstab] adding entry for ${EFS_ID}'
+  echo \"${EFS_ID}:/ \${MOUNT_POINT} efs defaults,_netdev,nofail 0 0\" >> /etc/fstab
 fi
 
-# 3. Check if already mounted
-if mount | grep -q " ${MOUNT_POINT} "; then
-  echo "[mount] EFS already mounted at ${MOUNT_POINT}"
+if mount | grep -q \" \${MOUNT_POINT} \"; then
+  echo '[mount] EFS already mounted at '\${MOUNT_POINT}
 else
-  echo "[mount] not mounted — running mount -a ..."
+  echo '[mount] not mounted — running mount -a ...'
   mount -a
-  if mount | grep -q " ${MOUNT_POINT} "; then
-    echo "[mount] SUCCESS — EFS mounted at ${MOUNT_POINT}"
+  if mount | grep -q \" \${MOUNT_POINT} \"; then
+    echo '[mount] SUCCESS — EFS mounted at '\${MOUNT_POINT}
   else
-    echo "[mount] FAILED — check EFS mount target availability and security groups" >&2
+    echo '[mount] FAILED — check EFS mount target availability and security groups' >&2
     exit 1
   fi
 fi
 
-# 4. Ensure ECS subdirs exist on the mounted filesystem
-mkdir -p ${MOUNT_POINT}/nginx ${MOUNT_POINT}/data
-echo "[dirs] ${MOUNT_POINT}/nginx and ${MOUNT_POINT}/data are present"
+mkdir -p \${MOUNT_POINT}/nginx \${MOUNT_POINT}/data
+echo '[dirs] '\${MOUNT_POINT}'/nginx and '\${MOUNT_POINT}'/data are present'
 
-# 5. Unmask and start ECS if it is currently masked/inactive
-ECS_STATE=$(systemctl is-active ecs 2>/dev/null || true)
-if [[ "$ECS_STATE" != "active" ]]; then
-  echo "[ecs] ECS is not active (state: ${ECS_STATE}) — unmasking and starting..."
+ECS_STATE=\$(systemctl is-active ecs 2>/dev/null || true)
+if [[ \"\${ECS_STATE}\" != \"active\" ]]; then
+  echo '[ecs] ECS is not active (state: '\${ECS_STATE}') — unmasking and starting...'
   systemctl unmask ecs
   systemctl start ecs
-  echo "[ecs] ECS started"
+  echo '[ecs] ECS started'
 else
-  echo "[ecs] ECS already active"
-fi
-CMDS
-)
+  echo '[ecs] ECS already active'
+fi"
 
-# Substitute the EFS_ID placeholder into the heredoc
-COMMANDS="${COMMANDS/EFS_ID_PLACEHOLDER/EFS_ID=${EFS_ID}}"
+ENCODED=$(printf '%s' "$REMOTE_SCRIPT" | base64 | tr -d '\n')
 
 # --- Fire SSM send-command on all instances ---
 echo "=== Sending mount-efs command to: $INSTANCE_IDS ==="
 CMD_ID=$(aws ssm send-command \
   --instance-ids $INSTANCE_IDS \
   --document-name AWS-RunShellScript \
-  --parameters "commands=[$(echo "$COMMANDS" | python3 -c "
-import sys, json
-lines = sys.stdin.read().splitlines()
-print(','.join(json.dumps(l) for l in lines))
-")]" \
+  --parameters "commands=[\"echo $ENCODED | base64 -d | bash\"]" \
   --comment "mount-efs" \
   --region "$REGION" \
   --query "Command.CommandId" --output text)
