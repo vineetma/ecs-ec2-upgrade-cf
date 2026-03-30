@@ -1,5 +1,6 @@
 #!/bin/bash
 # mount-efs.sh — verify EFS is mounted on all ECS instances; mount if not.
+# Discovers instances via ASG (not ECS) so it works even when ECS is still masked.
 # Runs the check+mount via SSM send-command (no SSH needed).
 # Usage: ./scripts/mount-efs.sh [stack-name] [region]
 
@@ -23,22 +24,62 @@ if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
 fi
 echo "EFS filesystem: $EFS_ID"
 
-# --- Resolve all EC2 instance IDs in the ECS cluster ---
-INSTANCE_ARNS=$(aws ecs list-container-instances \
-  --cluster MyECSCluster --region "$REGION" \
-  --query "containerInstanceArns[]" --output text)
+# --- Resolve EC2 instance IDs from the ASG ---
+# Uses ASG instead of ECS because ECS is masked at boot and may not have any
+# registered instances yet when this script is called during resume.
+ASG_NAME=$(aws cloudformation describe-stack-resources \
+  --stack-name "$STACK" --region "$REGION" \
+  --query "StackResources[?ResourceType=='AWS::AutoScaling::AutoScalingGroup'].PhysicalResourceId" \
+  --output text)
 
-if [[ -z "$INSTANCE_ARNS" ]]; then
-  echo "ERROR: No container instances registered in MyECSCluster." >&2
+if [[ -z "$ASG_NAME" || "$ASG_NAME" == "None" ]]; then
+  echo "ERROR: Could not find ASG in stack resources." >&2
   exit 1
 fi
 
-INSTANCE_IDS=$(aws ecs describe-container-instances \
-  --cluster MyECSCluster --region "$REGION" \
-  --container-instances $INSTANCE_ARNS \
-  --query "containerInstances[].ec2InstanceId" --output text)
+echo -n "Waiting for ASG instances to be InService"
+INSTANCE_IDS=""
+for i in $(seq 1 24); do  # up to 2 minutes
+  INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+    --auto-scaling-group-names "$ASG_NAME" --region "$REGION" \
+    --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
+    --output text)
+  [[ -n "$INSTANCE_IDS" ]] && break
+  echo -n "."
+  sleep 5
+done
+echo ""
 
+if [[ -z "$INSTANCE_IDS" ]]; then
+  echo "ERROR: No InService instances in ASG after timeout." >&2
+  exit 1
+fi
 echo "Instances: $INSTANCE_IDS"
+
+# --- Wait for SSM agent to be ready on all instances ---
+# Instances need ~60s after boot before SSM agent registers and can accept commands.
+echo -n "Waiting for SSM agent on all instances"
+for IIDS in $INSTANCE_IDS; do
+  for i in $(seq 1 24); do  # up to 2 minutes per instance
+    READY=$(aws ssm describe-instance-information \
+      --filters "Key=InstanceIds,Values=$IIDS" --region "$REGION" \
+      --query "InstanceInformationList | length(@)" \
+      --output text 2>/dev/null || echo "0")
+    [[ "$READY" -gt 0 ]] && break
+    echo -n "."
+    sleep 5
+  done
+  READY=$(aws ssm describe-instance-information \
+    --filters "Key=InstanceIds,Values=$IIDS" --region "$REGION" \
+    --query "InstanceInformationList | length(@)" \
+    --output text 2>/dev/null || echo "0")
+  if [[ "$READY" -eq 0 ]]; then
+    echo ""
+    echo "ERROR: SSM agent not ready on $IIDS after timeout." >&2
+    exit 1
+  fi
+done
+echo " ready."
 echo ""
 
 # --- SSM command: check mount, add fstab entry if missing, mount if not mounted ---
@@ -107,7 +148,7 @@ import sys, json
 lines = sys.stdin.read().splitlines()
 print(','.join(json.dumps(l) for l in lines))
 ")]" \
-  --comment "mount-efs manual remediation" \
+  --comment "mount-efs" \
   --region "$REGION" \
   --query "Command.CommandId" --output text)
 
@@ -116,7 +157,7 @@ echo ""
 
 # --- Poll until all invocations complete ---
 echo -n "Waiting for completion"
-for i in $(seq 1 36); do   # up to 3 minutes
+for i in $(seq 1 36); do  # up to 3 minutes
   sleep 5
   PENDING=$(aws ssm list-command-invocations \
     --command-id "$CMD_ID" --region "$REGION" \
