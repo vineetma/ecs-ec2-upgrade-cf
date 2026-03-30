@@ -383,9 +383,9 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn:
       - MyASG
-      # MyListener intentionally omitted from DependsOn: both MyService and MyListener are conditional
-      # on IsActive. CloudFormation does not support DependsOn referencing a conditional resource
-      # when the condition is false — it would error trying to resolve a resource that doesn't exist.
+      - MyListener  # Both MyService and MyListener share Condition: IsActive, so this DependsOn is safe.
+                    # When IsActive=false neither resource is created; when true, listener must exist
+                    # before ECS can register tasks with the target group.
     Properties:
       Cluster: !Ref MyECSCluster
       DesiredCount: 2
