@@ -28,7 +28,7 @@ Core infrastructure and app running end-to-end.
 
 Day-2 operations: upgrades, observability, app iteration.
 
-- [ ] **AMI rolling upgrade** — step through AMI versions using `scripts/update-ami.sh`; observe zero-downtime rolling replacement via ASG update policy
+- [x] **AMI rolling upgrade** — step through AMI versions using `scripts/update-ami.sh`; observe zero-downtime rolling replacement via ASG update policy
 - [ ] **Multi-container task** — split app into two containers (app + backend) sharing EFS volume; verify inter-container communication via localhost
 - [ ] **Secrets management** — move any config/secrets from environment variables to AWS Secrets Manager (or SSM Parameter Store SecureString); fetch at ECS task startup via `secrets` field in task definition
 - [ ] **CloudWatch logs** — add `awslogs` log driver to task definition; view container logs in CloudWatch instead of SSM exec
@@ -151,6 +151,7 @@ Re-implement in Terraform once CDK phase is done. Direct comparison of all three
 | Launch type | EC2 (not Fargate) | Cost control + visibility into host |
 | Networking | VPC stack-owned, no NAT Gateway | Cost; public subnets only |
 | EC2 access | SSM Session Manager only | No key pairs, no port 22 |
+| SSM Association timeout | `WaitForSuccessTimeoutSeconds: 600` | Boot (~2min) + SSM agent start (~60s) + script (~30s) exceeded the original 300s limit, causing `MyEFSSetupAssociation` CREATE_FAILED |
 | Image registry | Docker Hub now → ECR later | Simplicity; migrate when reusability requires it |
 | AMI | Deliberately old (2024-03-28) | Rolling upgrade is a planned exercise |
 | Cost target | ~$0.054/hr when running; $0 when suspended | Suspend stack when not in use |

@@ -311,7 +311,7 @@ Resources:
           - 'mount -a || echo "EFS mount failed - will retry on reconnect (nofail set)"'
           - 'mkdir -p /ecs/logs/nginx /ecs/logs/data'
           - 'systemctl unmask ecs && systemctl start ecs'
-      WaitForSuccessTimeoutSeconds: 300
+      WaitForSuccessTimeoutSeconds: 600  # bumped from 300: boot ~2min + SSM agent start ~60s + script ~30s leaves no margin at 300s
 
   # --- S3: Backup bucket for records.json — persists across suspend/resume cycles ---
   # DeletionPolicy: Retain keeps the bucket when the stack is deleted.
