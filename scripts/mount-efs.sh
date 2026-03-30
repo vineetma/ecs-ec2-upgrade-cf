@@ -179,9 +179,39 @@ for IIDS in $INSTANCE_IDS; do
   [[ "$STATUS" != "Success" ]] && OVERALL=1
 done
 
-if [[ "$OVERALL" -eq 0 ]]; then
-  echo "=== All instances: EFS mounted and ECS running ==="
-else
+if [[ "$OVERALL" -ne 0 ]]; then
   echo "=== One or more instances FAILED — check output above ===" >&2
   exit 1
+fi
+
+echo "=== All instances: EFS mounted and ECS running ==="
+echo ""
+
+# --- Force restart ECS tasks so they bind to EFS, not local disk ---
+# Tasks that started before EFS was mounted have their /data bind-mount pointing
+# at the local-disk path. Fixing the host mount does not fix already-running
+# containers — they must be restarted to pick up the EFS-backed path.
+CLUSTER=$(aws cloudformation describe-stack-resources \
+  --stack-name "$STACK" --region "$REGION" \
+  --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId" \
+  --output text 2>/dev/null || echo "")
+
+SERVICE=$(aws cloudformation describe-stack-resources \
+  --stack-name "$STACK" --region "$REGION" \
+  --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" \
+  --output text 2>/dev/null || echo "")
+
+if [[ -n "$CLUSTER" && -n "$SERVICE" && "$SERVICE" != "None" ]]; then
+  echo "=== Restarting ECS tasks to rebind /data to EFS ==="
+  aws ecs update-service \
+    --cluster "$CLUSTER" --service "$SERVICE" \
+    --force-new-deployment \
+    --region "$REGION" > /dev/null
+  echo "Waiting for service to stabilize ..."
+  aws ecs wait services-stable \
+    --cluster "$CLUSTER" --services "$SERVICE" \
+    --region "$REGION"
+  echo "Tasks restarted — /data is now backed by EFS."
+else
+  echo "No active ECS service found — skipping task restart."
 fi
