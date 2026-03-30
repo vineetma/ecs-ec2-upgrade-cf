@@ -44,6 +44,14 @@ aws cloudformation deploy \
       EFSEnabled=true \
   --capabilities CAPABILITY_NAMED_IAM
 
+# Mount EFS and start ECS on all instances before declaring the stack live.
+# The SSM Association in the template handles this automatically, but can race
+# against CloudFormation completing — mount-efs.sh waits for SSM readiness and
+# verifies the mount, guaranteeing tasks start with EFS not local disk.
+echo ""
+echo "=== Mounting EFS and starting ECS ==="
+"$SCRIPT_DIR/mount-efs.sh" "$STACK" "$REGION"
+
 echo ""
 echo "=== Stack is live ==="
 aws cloudformation describe-stacks \
