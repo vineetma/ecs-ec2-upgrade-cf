@@ -24,6 +24,33 @@ if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
 fi
 echo "EFS filesystem: $EFS_ID"
 
+# --- Wait for all EFS mount targets to be available ---
+# CloudFormation marks the stack complete once mount targets are created, but they
+# take ~1-2 minutes more to reach "available" and become DNS-resolvable. Mounting
+# before that causes "Failed to resolve *.efs.amazonaws.com" errors.
+echo -n "Waiting for EFS mount targets to be available"
+for i in $(seq 1 24); do  # up to 2 minutes
+  MT_COUNT=$(aws efs describe-mount-targets \
+    --file-system-id "$EFS_ID" --region "$REGION" \
+    --query "MountTargets[?LifeCycleState=='available'] | length(@)" \
+    --output text 2>/dev/null || echo "0")
+  TOTAL=$(aws efs describe-mount-targets \
+    --file-system-id "$EFS_ID" --region "$REGION" \
+    --query "MountTargets | length(@)" \
+    --output text 2>/dev/null || echo "0")
+  if [[ "$TOTAL" -gt 0 && "$MT_COUNT" == "$TOTAL" ]]; then
+    echo " ready ($MT_COUNT/$TOTAL)."
+    break
+  fi
+  echo -n "."
+  sleep 5
+  if [[ "$i" -eq 24 ]]; then
+    echo ""
+    echo "ERROR: EFS mount targets not available after timeout ($MT_COUNT/$TOTAL ready)." >&2
+    exit 1
+  fi
+done
+
 # --- Resolve EC2 instance IDs from the ASG ---
 # Uses ASG instead of ECS because ECS is masked at boot and may not have any
 # registered instances yet when this script is called during resume.
