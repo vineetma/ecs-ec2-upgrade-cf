@@ -283,15 +283,16 @@ docker push YOUR_DOCKERHUB_USERNAME/ecs-hello-world:v1.0.0
 ### Stack Deploy
 
 ```bash
-aws cloudformation deploy \
-  --template-file cf/ecs-ec2-multi-node-cf.yaml \
-  --stack-name ecs-hello-world \
-  --region us-east-1 \
-  --parameter-overrides AppImage=vineetma/ecs-hello-world:1.4 \
-  --capabilities CAPABILITY_NAMED_IAM
+./scripts/deploy.sh
 ```
 
-The `AppImage` parameter is how you swap to a new image version without editing the template — push a new tag and redeploy with the updated `--parameter-overrides`.
+This creates the stack and then calls `mount-efs.sh` to verify EFS is mounted on all instances and ECS is running before returning. Do not skip this step — running `cloudformation deploy` directly will not wait for EFS.
+
+```bash
+./scripts/mount-efs.sh
+```
+
+Run this any time EFS may not be mounted (after a reboot, after an SSM Association failure, or to verify state). It mounts EFS on all instances, starts ECS if masked, and force-restarts running tasks so they rebind `/data` to EFS instead of local disk.
 
 If a deploy fails and subsequent deploys are blocked, resume the rollback first:
 
@@ -302,13 +303,21 @@ aws cloudformation continue-update-rollback --stack-name ecs-hello-world --regio
 ### Verify
 
 ```bash
+# Check ALB URL from stack outputs
 aws cloudformation describe-stacks \
   --stack-name ecs-hello-world \
   --query "Stacks[0].Outputs" \
   --region us-east-1
+
+# Confirm both instances return the same records (EFS shared correctly)
+for i in $(seq 1 6); do
+  echo "--- request $i ---"
+  curl -s <ALBDNSName>/records
+  echo ""
+done
 ```
 
-The `ALBDNSName` output contains the URL. Open it in a browser — you should see the nginx welcome page.
+All 6 responses should be identical. Alternating results means EFS is not mounted and tasks are on local disk — run `./scripts/mount-efs.sh` to fix.
 
 ---
 
@@ -352,28 +361,10 @@ aws ssm start-session --target <instance-id> --region us-east-1
 ## Clean Up
 
 ```bash
-# Step 1: Scale ECS service to 0 before deleting — bypasses the 300s ALB deregistration drain
-# and prevents the ECS service DELETE_FAILED timeout that occurs when tasks are still running.
-CLUSTER=$(aws cloudformation describe-stack-resources --stack-name ecs-hello-world \
-  --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId" --output text)
-SERVICE=$(aws cloudformation describe-stack-resources --stack-name ecs-hello-world \
-  --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" --output text)
-
-aws ecs update-service --cluster $CLUSTER --service $SERVICE --desired-count 0
-
-# Wait ~30s for tasks to drain, then delete the stack
-sleep 30
-
-# Step 2: Delete the stack (removes VPC, EFS, ASG, ECS cluster — everything)
-aws cloudformation delete-stack \
-  --stack-name ecs-hello-world \
-  --region us-east-1
-
-# Wait for full deletion
-aws cloudformation wait stack-delete-complete \
-  --stack-name ecs-hello-world \
-  --region us-east-1
+./scripts/delete.sh
 ```
+
+This handles the full deletion sequence: drains ECS tasks, unmounts EFS on all instances (so EFS MountTargets can delete cleanly), terminates EC2 instances via ASG, then deletes the stack. Do not call `aws cloudformation delete-stack` directly — skipping the pre-delete steps causes EFS MountTargets to hang, which blocks VPC cleanup and leaves the stack stuck in `DELETE_IN_PROGRESS`.
 
 **Note:** Terminated EC2 instances do not require manual cleanup — AWS automatically purges them from the API within ~1 hour of termination. To confirm old instances are gone:
 
