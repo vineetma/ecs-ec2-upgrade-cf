@@ -45,7 +45,16 @@ AWS ECS infrastructure built with CloudFormation. Objectives: build reusable com
 4. Verify via stack outputs
 5. Clean up: delete stack + deregister any ECS task definition revisions
 
+## Git Workflow
+
+- **Feature branches** — all work happens on a feature branch, never directly on `main`
+- **Branch naming** — `feature/<issue-number>-short-description` (e.g. `feature/12-cdk-ecs-stack`)
+- **GitHub Issues** — every piece of work must have a corresponding GitHub issue before starting; reference the issue in every commit message and PR
+- **Commit message format** — `<type>: <description> (#<issue-number>)` (e.g. `feat: add CDK ECS stack (#12)`)
+- **PR to main** — work is merged to `main` via a pull request; squash or merge commit both acceptable
+- **Before starting any task** — confirm the GitHub issue number; create one if it doesn't exist yet
+
 ## Agents
 
 - Use the `ecs-infra` agent for all infrastructure work in this project
-- Use the `commit` agent to stage, commit, and push changes — always push to `origin/main` without asking for confirmation
+- Use the `commit` agent to stage, commit, and push changes — always push to the **current feature branch**, not `main`
